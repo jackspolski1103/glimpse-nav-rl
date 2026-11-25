@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+data/
+cache/
+checkpoints/
+runs/
+*.pt
+*.npy
+.DS_Store
+.claude/
