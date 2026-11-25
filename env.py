@@ -63,8 +63,11 @@ class GlimpseNav:
         reached = (self.pos == self.goal).all(1)
         done = reached | (self.t >= self.max_steps)
         reward = reached.float() - self.step_cost
-        info = {"success": reached[done], "steps": self.t[done], "dist0": self.dist0[done]}
+        timeout = done & ~reached
+        info = {"success": reached[done], "steps": self.t[done], "dist0": self.dist0[done], "timeout": timeout}
         if self.auto_reset:
+            if timeout.any():
+                info["final_obs"] = self.observe()  # observación terminal, antes de reiniciar
             self.reset_where(done)
         return self.observe(), reward, done, info
 

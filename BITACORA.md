@@ -50,6 +50,60 @@ Hecho mientras se descargaba Imagenette; no depende de los embeddings.
 - `uv run python test_no_leak.py`: **pasa**. Cambia todos los píxeles de la imagen salvo los de un glimpse y comprueba que el embedding de ese glimpse no varía (y que los de otros glimpses sí).
 - Única excepción, a propósito: el experimento B evalúa el encoder con imagen completa, porque así se evaluó el modelo original. No interviene en ningún entrenamiento.
 
-## Fase 0: embeddings y probes
+## 2026-11-25 — Fase 0: embeddings y probes (completada)
 
-_Pendiente: descarga de Imagenette en curso (se cortó una vez a los 815 MB; relanzada con reintentos)._
+- Imagenette descargado: 9 469 imágenes de entrenamiento, 3 925 de validación. (La descarga se cortó una vez; se terminó en 8 tramos paralelos y la descompresión verificó la integridad.)
+- `uv run python precompute.py` → `cache/train.npz` (9469×49×384) y `cache/val.npz` (3925×49×384), unos 15 min en el Mac.
+- `uv run python probes.py` (entrena en train, evalúa en val; 3000 pasos, semilla 0):
+
+  | Probe | Resultado | Referencia |
+  |---|---|---|
+  | Posición absoluta desde 1 glimpse (lineal, 49 clases) | 10,9 % | azar 2,0 % |
+  | Dirección del vecino desde 2 glimpses (lineal) | 47,2 % | azar 25 % |
+  | Dirección del vecino desde 2 glimpses (MLP 512) | 72,9 % | azar 25 % |
+  | Desplazamiento entre 2 glimpses cualesquiera (MLP 512) | error 2,92 casillas; exacto 7,4 % | sin información: 4,58 casillas |
+
+- **Lectura:** un glimpse aislado casi no sabe dónde está (lo que se buscaba). Dos glimpses vecinos permiten deducir la dirección mejor que el azar pero lejos del 100 %, y hace falta no linealidad (47 % → 73 %). Para pares lejanos la información es escasa. Ese es el margen que el fine-tuning puede mejorar.
+- Limitación: una semilla y probes cortos; los números del MLP pueden subir con más entrenamiento.
+
+## 2026-11-25 — Fase 1: PPO sobre embeddings congelados y comprobación cruzada
+
+Todo en validación, 4096 episodios por evaluación. Paseo aleatorio: 23,0 % de éxito, SPL 0,096.
+
+**Comprobación cruzada con Stable-Baselines3** (`sb3_check.py`; 64 entornos, 2 M de pasos, mismos hiperparámetros, misma función de evaluación):
+
+| Implementación | Semillas 0 / 1 / 2 (éxito %) | Media |
+|---|---|---|
+| Stable-Baselines3 PPO | 51,6 / 50,0 / 52,1 | 51,2 |
+| PPO propio, CleanRL original | 42,9 (solo semilla 0) | — |
+| + continuar el valor al agotarse el tiempo | 47,2 / 44,7 / 47,0 | 46,3 |
+| + sin recorte de la pérdida de valor (**versión final**) | 49,5 / 50,1 / 47,3 | 49,0 |
+
+- Dos diferencias de implementación explicaban la brecha inicial de ~9 puntos:
+  1. **Tiempo agotado:** CleanRL lo trata como estado terminal; lo correcto (Pardo et al., 2018; lo que hace SB3) es continuar con el valor del estado final. `env.py` devuelve ahora la observación terminal y `ppo.py` la usa.
+  2. **Recorte de la pérdida de valor:** CleanRL lo aplica por defecto, SB3 no. Ahora está desactivado por defecto (`--clip-vloss` lo reactiva).
+- Quedan ~2 puntos de diferencia en la media, con rangos que casi se tocan (47,3–50,1 frente a 50,0–52,1). Con 3 semillas no se puede afirmar que sea cero; se da la implementación por validada para la fase 1 y se anota como diferencia residual.
+- En la tarea de control (posiciones dadas) ambas implementaciones llegan al 100 %.
+
+**Entrenamiento largo, versión final** (`uv run python ppo.py --task embeddings --steps 10000000 --evals 20 --name frozen_s0`; 256 entornos, semilla 0, ~7 min en CPU):
+
+| | Éxito (val) | Éxito (train) | SPL (val) |
+|---|---|---|---|
+| Sin entrenar | 22,7 % | 23,4 % | 0,098 |
+| 2 M de pasos | ~54 % | ~55 % | ~0,35 |
+| 10 M de pasos | **60,3 %** | 61,4 % | **0,404** |
+
+![Curva de aprendizaje](figures/frozen_s0_curva.png)
+
+La curva sube rápido hasta ~55 % en 2 M de pasos y después muy despacio: se acerca a un techo. **Esta es la línea base del experimento A** (encoder original congelado). Una sola semilla.
+
+**Ejemplos sobre validación** (`uv run python viz.py --name frozen_s0`): seis imágenes de validación, mismo inicio y objetivo, con el agente sin entrenar y tras 1, 5 y 10 M de pasos. La política es estocástica, así que cada recorrido es una muestra.
+
+![Trayectorias](figures/frozen_s0_trayectorias.png)
+
+Observaciones sobre estos seis casos (anecdóticas, no medidas):
+- Sin entrenar, el agente deambula cerca del inicio; entrenado, va hacia el objetivo cuando este tiene contenido distintivo (panel del equipo, letras de la carátula, pared gris junto al borde).
+- Los fallos se concentran en objetivos sin contenido propio (cielo blanco, fondo blanco): desde el embedding no hay forma de saber dónde está ese recorte. En esos casos el agente termina pegado a un borde.
+- Pendiente de medir: éxito según la distancia inicial al objetivo y según lo "informativo" que sea el glimpse objetivo.
+
+**Sin sobreajuste:** el éxito en imágenes de entrenamiento es prácticamente igual al de validación en todas las corridas. El techo no es memorización sino lo que el embedding congelado permite deducir.

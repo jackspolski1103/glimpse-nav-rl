@@ -2,8 +2,8 @@
 
 Adaptado de CleanRL, ppo.py (https://github.com/vwxyzjn/cleanrl, Huang et al., JMLR 2022):
 mismos detalles (init ortogonal, Adam eps=1e-5, LR decreciente, GAE, ventaja normalizada,
-pérdida de valor recortada, recorte de gradiente). Como en CleanRL, agotar el tiempo se trata
-como fin de episodio.
+pérdida de valor recortada, recorte de gradiente). Diferencia con CleanRL: al agotarse el tiempo
+se continúa con el valor del estado final (Pardo et al., 2018), como hace Stable-Baselines3.
 
 Uso:
   uv run python ppo.py --task positions      # comprobación: posiciones dadas, debe llegar a ~100 %
@@ -65,7 +65,9 @@ def evaluate(env, policy):
 
 
 def train(env, eval_env, obs_dim, total_steps, num_steps=32, lr=2.5e-4, gamma=0.99, lam=0.95,
-          epochs=4, minibatches=4, clip=0.2, ent_coef=0.01, vf_coef=0.5, max_grad=0.5, evals=10):
+          epochs=4, minibatches=4, clip=0.2, ent_coef=0.01, vf_coef=0.5, max_grad=0.5, evals=10,
+          train_eval_env=None, ckpt=None, clip_vloss=False):
+    """train_eval_env: mide también en imágenes de entrenamiento. ckpt: prefijo para guardar el agente en cada evaluación."""
     dev, n = env.dev, env.n
     agent = Agent(obs_dim).to(dev)
     opt = torch.optim.Adam(agent.parameters(), lr=lr, eps=1e-5)
@@ -77,13 +79,28 @@ def train(env, eval_env, obs_dim, total_steps, num_steps=32, lr=2.5e-4, gamma=0.
     sample = lambda o: agent.act(o)[0]
     history, t0 = [], time.time()
 
+    def log(u):
+        m = {"steps": u * batch, **evaluate(eval_env, sample)}
+        if train_eval_env:
+            m["train_success"] = evaluate(train_eval_env, sample)["success"]
+        if ckpt:
+            torch.save(agent.state_dict(), f"{ckpt}_{u * batch}.pt")
+        history.append(m)
+        tr = f"  (train {m['train_success'] * 100:5.1f} %)" if train_eval_env else ""
+        print(f"pasos {m['steps']:>10,}  éxito {m['success'] * 100:5.1f} %{tr}  SPL {m['spl']:.3f}  "
+              f"({u * batch / max(time.time() - t0, 1e-9):,.0f} pasos/s)", flush=True)
+
+    log(0)
     for u in range(1, updates + 1):
         opt.param_groups[0]["lr"] = lr * (1 - (u - 1) / updates)
         for t in range(num_steps):
             obs_b[t], done_b[t] = next_obs, next_done
             with torch.no_grad():
                 a, lp, _, v = agent.act(next_obs)
-            next_obs, r, d, _ = env.step(a)
+            next_obs, r, d, info = env.step(a)
+            if info["timeout"].any():  # tiempo agotado no es un estado terminal: se continúa con V(s)
+                with torch.no_grad():
+                    r = r + gamma * agent.critic(info["final_obs"]).squeeze(-1) * info["timeout"]
             act_b[t], logp_b[t], val_b[t], rew_b[t], next_done = a, lp, v, r, d.float()
 
         with torch.no_grad():
@@ -104,8 +121,11 @@ def train(env, eval_env, obs_dim, total_steps, num_steps=32, lr=2.5e-4, gamma=0.
                 ratio = (newlp - lp[mb]).exp()
                 madv = (ad[mb] - ad[mb].mean()) / (ad[mb].std() + 1e-8)
                 pg = torch.max(-madv * ratio, -madv * ratio.clamp(1 - clip, 1 + clip)).mean()
-                v_clip = vl[mb] + (newv - vl[mb]).clamp(-clip, clip)
-                v_loss = 0.5 * torch.max((newv - rt[mb]) ** 2, (v_clip - rt[mb]) ** 2).mean()
+                v_loss = (newv - rt[mb]) ** 2
+                if clip_vloss:
+                    v_clip = vl[mb] + (newv - vl[mb]).clamp(-clip, clip)
+                    v_loss = torch.max(v_loss, (v_clip - rt[mb]) ** 2)
+                v_loss = 0.5 * v_loss.mean()
                 loss = pg - ent_coef * ent.mean() + vf_coef * v_loss
                 opt.zero_grad()
                 loss.backward()
@@ -113,10 +133,7 @@ def train(env, eval_env, obs_dim, total_steps, num_steps=32, lr=2.5e-4, gamma=0.
                 opt.step()
 
         if u % max(1, updates // evals) == 0 or u == updates:
-            m = {"steps": u * batch, **evaluate(eval_env, sample)}
-            history.append(m)
-            print(f"pasos {m['steps']:>9,}  éxito {m['success'] * 100:5.1f} %  SPL {m['spl']:.3f}  "
-                  f"({u * batch / (time.time() - t0):,.0f} pasos/s)", flush=True)
+            log(u)
     return agent, history
 
 
@@ -127,6 +144,17 @@ def table_embed(split, suffix, dev, stats=None):
     return (lambda i, c: e[i, c]), len(e), e.shape[-1], stats
 
 
+def make_task(task, suffix, dev):
+    """-> (embed_train, n_train), (embed_val, n_val), obs_dim"""
+    if task == "positions":  # el "embedding" es la posición misma: la tarea se vuelve trivial
+        eye = torch.eye(GRID * GRID, device=dev)
+        emb = lambda i, c: eye[c]
+        return (emb, 1), (emb, 1), 2 * GRID * GRID + EGO * EGO
+    emb_tr, n_tr, d, stats = table_embed("train", suffix, dev)
+    emb_va, n_va, _, _ = table_embed("val", suffix, dev, stats)
+    return (emb_tr, n_tr), (emb_va, n_va), 2 * d + EGO * EGO
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--task", choices=["positions", "embeddings"], default="embeddings")
@@ -135,25 +163,25 @@ def main():
     ap.add_argument("--envs", type=int, default=256)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default="cpu")
+    ap.add_argument("--evals", type=int, default=10)
+    ap.add_argument("--clip-vloss", action="store_true", help="recorte de la pérdida de valor (CleanRL)")
+    ap.add_argument("--name", help="guarda checkpoints en checkpoints/<name>_<pasos>.pt")
     args = ap.parse_args()
     torch.manual_seed(args.seed)
     dev = args.device
 
-    if args.task == "positions":  # el "embedding" es la posición misma: la tarea se vuelve trivial
-        eye = torch.eye(GRID * GRID, device=dev)
-        emb_tr = emb_va = lambda i, c: eye[c]
-        n_tr = n_va = 1
-        d = GRID * GRID
-    else:
-        emb_tr, n_tr, d, stats = table_embed("train", args.suffix, dev)
-        emb_va, n_va, _, _ = table_embed("val", args.suffix, dev, stats)
-
-    obs_dim = 2 * d + EGO * EGO
+    (emb_tr, n_tr), (emb_va, n_va), obs_dim = make_task(args.task, args.suffix, dev)
     env = GlimpseNav(emb_tr, n_tr, args.envs, dev)
     eval_env = GlimpseNav(emb_va, n_va, 4096, dev)
     rand = evaluate(eval_env, lambda o: torch.randint(4, (len(o),), device=dev))
     print(f"paseo aleatorio: éxito {rand['success'] * 100:.1f} %  SPL {rand['spl']:.3f}")
-    _, history = train(env, eval_env, obs_dim, args.steps)
+    ckpt = None
+    if args.name:
+        Path("checkpoints").mkdir(exist_ok=True)
+        ckpt = f"checkpoints/{args.name}"
+    _, history = train(env, eval_env, obs_dim, args.steps, evals=args.evals,
+                       train_eval_env=GlimpseNav(emb_tr, n_tr, 4096, dev), ckpt=ckpt,
+                       clip_vloss=args.clip_vloss)
 
     Path("results").mkdir(exist_ok=True)
     with open("results/ppo.jsonl", "a") as fh:

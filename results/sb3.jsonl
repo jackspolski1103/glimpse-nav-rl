@@ -1,0 +1,4 @@
+{"task": "positions", "suffix": "", "steps": 300000, "envs": 64, "seed": 0, "final": {"success": 1.0, "spl": 0.9672062993049622}}
+{"task": "embeddings", "suffix": "", "steps": 2000000, "envs": 64, "seed": 0, "final": {"success": 0.515869140625, "spl": 0.3443417549133301}}
+{"task": "embeddings", "suffix": "", "steps": 2000000, "envs": 64, "seed": 2, "final": {"success": 0.520751953125, "spl": 0.34075990319252014}}
+{"task": "embeddings", "suffix": "", "steps": 2000000, "envs": 64, "seed": 1, "final": {"success": 0.50048828125, "spl": 0.3326875567436218}}
