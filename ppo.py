@@ -66,10 +66,10 @@ def evaluate(env, policy):
 
 def train(env, eval_env, obs_dim, total_steps, num_steps=32, lr=2.5e-4, gamma=0.99, lam=0.95,
           epochs=4, minibatches=4, clip=0.2, ent_coef=0.01, vf_coef=0.5, max_grad=0.5, evals=10,
-          train_eval_env=None, ckpt=None, clip_vloss=False):
+          train_eval_env=None, ckpt=None, clip_vloss=False, hidden=256):
     """train_eval_env: mide también en imágenes de entrenamiento. ckpt: prefijo para guardar el agente en cada evaluación."""
     dev, n = env.dev, env.n
-    agent = Agent(obs_dim).to(dev)
+    agent = Agent(obs_dim, hidden).to(dev)
     opt = torch.optim.Adam(agent.parameters(), lr=lr, eps=1e-5)
     batch = n * num_steps
     updates = total_steps // batch
@@ -164,6 +164,8 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--evals", type=int, default=10)
+    ap.add_argument("--hidden", type=int, default=256)
+    ap.add_argument("--walls", choices=["sensor", "bump"], help="información de borde en la observación (4 valores)")
     ap.add_argument("--clip-vloss", action="store_true", help="recorte de la pérdida de valor (CleanRL)")
     ap.add_argument("--name", help="guarda checkpoints en checkpoints/<name>_<pasos>.pt")
     args = ap.parse_args()
@@ -171,8 +173,9 @@ def main():
     dev = args.device
 
     (emb_tr, n_tr), (emb_va, n_va), obs_dim = make_task(args.task, args.suffix, dev)
-    env = GlimpseNav(emb_tr, n_tr, args.envs, dev)
-    eval_env = GlimpseNav(emb_va, n_va, 4096, dev)
+    obs_dim += 4 * bool(args.walls)
+    env = GlimpseNav(emb_tr, n_tr, args.envs, dev, walls=args.walls)
+    eval_env = GlimpseNav(emb_va, n_va, 4096, dev, walls=args.walls)
     rand = evaluate(eval_env, lambda o: torch.randint(4, (len(o),), device=dev))
     print(f"paseo aleatorio: éxito {rand['success'] * 100:.1f} %  SPL {rand['spl']:.3f}")
     ckpt = None
@@ -180,8 +183,8 @@ def main():
         Path("checkpoints").mkdir(exist_ok=True)
         ckpt = f"checkpoints/{args.name}"
     _, history = train(env, eval_env, obs_dim, args.steps, evals=args.evals,
-                       train_eval_env=GlimpseNav(emb_tr, n_tr, 4096, dev), ckpt=ckpt,
-                       clip_vloss=args.clip_vloss)
+                       train_eval_env=GlimpseNav(emb_tr, n_tr, 4096, dev, walls=args.walls), ckpt=ckpt,
+                       clip_vloss=args.clip_vloss, hidden=args.hidden)
 
     Path("results").mkdir(exist_ok=True)
     with open("results/ppo.jsonl", "a") as fh:

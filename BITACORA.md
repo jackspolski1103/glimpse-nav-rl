@@ -106,4 +106,44 @@ Observaciones sobre estos seis casos (anecdóticas, no medidas):
 - Los fallos se concentran en objetivos sin contenido propio (cielo blanco, fondo blanco): desde el embedding no hay forma de saber dónde está ese recorte. En esos casos el agente termina pegado a un borde.
 - Pendiente de medir: éxito según la distancia inicial al objetivo y según lo "informativo" que sea el glimpse objetivo.
 
+**Más ejemplos** (agente final, 12 imágenes de validación por figura, con flechas de recorrido): llegó en 9 de 12 y en 5 de 12.
+
+![Ejemplos 1](figures/frozen_s0_ejemplos_1.png)
+![Ejemplos 2](figures/frozen_s0_ejemplos_2.png)
+
 **Sin sobreajuste:** el éxito en imágenes de entrenamiento es prácticamente igual al de validación en todas las corridas. El techo no es memorización sino lo que el embedding congelado permite deducir.
+
+## 2026-11-25 — Fase 1: ¿dónde falla el agente? (línea base `frozen_s0`)
+
+`uv run python analysis.py --name frozen_s0` (50 000 episodios de validación, éxito global 60,7 %):
+
+| Distancia inicial (casillas) | Éxito |
+|---|---|
+| 1–2 | 68,6 % |
+| 3–4 | 64,1 % |
+| 5–6 | 59,0 % |
+| 7–8 | 52,8 % |
+| 9–12 | 44,5 % |
+
+- **Incluso a 1–2 casillas falla un 31 %**, pese a que el objetivo se solapa con lo que ve. Coincide con el probe de dirección del vecino (73 %): el embedding congelado no deja deducir bien la dirección.
+- **La hipótesis "falla cuando el objetivo es ambiguo" no se confirma.** Midiendo la ambigüedad como la similitud máxima del objetivo con otras casillas de la imagen, el éxito por cuartiles es 55,9 / 63,8 / 65,2 / 57,8 %: no hay tendencia. (La medida es imperfecta: con solape, la casilla más parecida suele ser una vecina.)
+
+**Hallazgo: el agente se queda atascado contra el borde.** Al chocar, la observación no cambia, así que repite la acción.
+
+| | En episodios fallidos | En episodios con éxito |
+|---|---|---|
+| Pasos gastados chocando con el borde | 51,4 % | 7,5 % |
+
+- El 72,1 % de los fallos incluye una racha de ≥5 choques seguidos; el 56,2 %, de ≥10.
+- Es un defecto del entorno, no del embedding: el agente no tiene forma de percibir el borde.
+
+**Prueba de dos remedios** (`--walls`, 2 M de pasos, 256 entornos, semilla 0):
+
+| Observación | Éxito (val) | SPL |
+|---|---|---|
+| Sin información de borde (actual) | 54,2 % | 0,357 |
+| `bump`: dirección del último movimiento bloqueado | 59,3 % | 0,391 |
+| `sensor`: hay borde arriba/abajo/izquierda/derecha | 64,4 % | 0,431 |
+
+- `sensor` rinde más, pero revela posición parcial (24 de las 49 casillas tocan un borde). `bump` solo informa después de chocar.
+- Decisión pendiente del usuario. Una semilla por variante.

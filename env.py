@@ -19,16 +19,17 @@ MOVES = [[-1, 0], [1, 0], [0, -1], [0, 1]]  # arriba, abajo, izquierda, derecha
 
 class GlimpseNav:
     def __init__(self, embed, n_images, n_envs, dev="cpu", embed_goal=None,
-                 max_steps=24, step_cost=0.01, auto_reset=True):
+                 max_steps=24, step_cost=0.01, auto_reset=True, walls=None):
         """embed(img_idx, cell_idx) -> (B, D). En la fase 1 es una tabla; en la 2, el encoder en vivo."""
         self.embed, self.embed_goal = embed, embed_goal or embed
         self.n_images, self.n, self.dev = n_images, n_envs, dev
-        self.max_steps, self.step_cost, self.auto_reset = max_steps, step_cost, auto_reset
+        self.max_steps, self.step_cost, self.auto_reset, self.walls = max_steps, step_cost, auto_reset, walls
         self.moves = torch.tensor(MOVES, device=dev)
         self.ar = torch.arange(n_envs, device=dev)
         z = lambda *s: torch.zeros(n_envs, *s, dtype=torch.long, device=dev)
         self.img, self.pos, self.goal, self.t, self.dist0 = z(), z(2), z(2), z(), z()
         self.visited = torch.zeros(n_envs, GRID, GRID, dtype=torch.bool, device=dev)
+        self.bump = torch.zeros(n_envs, 4, device=dev)
         self.reset_where(torch.ones(n_envs, dtype=torch.bool, device=dev))
 
     def reset_where(self, mask):
@@ -45,6 +46,7 @@ class GlimpseNav:
         self.dist0[idx] = (pos - goal).abs().sum(1)
         self.visited[idx] = False
         self.visited[idx, pos[:, 0], pos[:, 1]] = True
+        self.bump[idx] = 0
 
     def observe(self):
         z = self.embed(self.img, self.pos[:, 0] * GRID + self.pos[:, 1])
@@ -54,10 +56,19 @@ class GlimpseNav:
         rows = (self.pos[:, 0, None] + win)[:, :, None]
         cols = (self.pos[:, 1, None] + win)[:, None, :]
         ego = pad[self.ar[:, None, None], rows, cols]  # centro (6,6) = casilla actual
-        return torch.cat([z, g, ego.flatten(1)], 1)
+        parts = [z, g, ego.flatten(1)]
+        if self.walls == "sensor":  # ¿hay límite de la imagen arriba, abajo, izquierda, derecha?
+            r, c = self.pos[:, 0], self.pos[:, 1]
+            parts.append(torch.stack([r == 0, r == GRID - 1, c == 0, c == GRID - 1], 1).float())
+        elif self.walls == "bump":  # solo sabe del borde tras chocar: dirección del último movimiento bloqueado
+            parts.append(self.bump)
+        return torch.cat(parts, 1)
 
     def step(self, action):
+        old = self.pos
         self.pos = (self.pos + self.moves[action]).clamp(0, GRID - 1)  # contra el borde: no se mueve
+        blocked = (self.pos == old).all(1)
+        self.bump = F.one_hot(action, 4).float() * blocked[:, None]
         self.t += 1
         self.visited[self.ar, self.pos[:, 0], self.pos[:, 1]] = True
         reached = (self.pos == self.goal).all(1)

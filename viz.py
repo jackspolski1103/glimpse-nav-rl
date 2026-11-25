@@ -134,6 +134,49 @@ def trajectories(name, out, n=6, seed=0):
     plt.close(fig)
 
 
+def examples(name, out, rows=3, cols=4, seed=1):
+    """Agente final sobre imágenes de validación: una imagen por ejemplo, con el recorrido y su sentido."""
+    ck = max(glob.glob(f"checkpoints/{name}_*.pt"), key=lambda p: int(p.rsplit("_", 1)[1][:-3]))
+    _, (emb_va, n_va), obs_dim = make_task("embeddings", "", "cpu")
+    ds = datasets.ImageFolder("data/imagenette2/val", transforms.Compose(
+        [transforms.Resize(IMG), transforms.CenterCrop(IMG), transforms.ToTensor()]))
+    n = rows * cols
+    g = torch.Generator().manual_seed(seed)
+    img = torch.randperm(n_va, generator=g)[:n]
+    start = torch.randint(GRID, (n, 2), generator=g)
+    goal = (start + torch.randint(1, GRID, (n, 2), generator=g)) % GRID
+    agent = Agent(obs_dim)
+    agent.load_state_dict(torch.load(ck))
+    paths, ok = rollout(agent, emb_va, n_va, img, start, goal, seed)
+
+    fig, axes = plt.subplots(rows, cols, figsize=(3.6 * cols, 3.9 * rows))
+    for i, ax in enumerate(axes.flat):
+        ax.imshow(ds[int(img[i])][0].permute(1, 2, 0))
+        box(ax, start[i].tolist(), BLUE)
+        box(ax, goal[i].tolist(), ORANGE)
+        pts = [(c * STRIDE + GLIMPSE / 2, r * STRIDE + GLIMPSE / 2) for r, c in paths[i]]
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+            if (x0, y0) == (x1, y1):
+                continue  # chocó con el borde
+            for color, lw in (("white", 4.5), (INK, 2)):
+                ax.annotate("", (x1, y1), (x0, y0), arrowprops=dict(arrowstyle="-|>", color=color, lw=lw,
+                            shrinkA=0, shrinkB=0, mutation_scale=11))
+        ax.plot(*pts[0], "o", ms=9, color=BLUE, mec="white", mew=2)
+        ax.plot(*pts[-1], "o", ms=9, color=INK, mec="white", mew=2)
+        dist = int((start[i] - goal[i]).abs().sum())
+        ax.set_title(f"{'Llegó' if ok[i] else 'No llegó'} · {len(paths[i]) - 1} pasos (mínimo {dist})",
+                     fontsize=10, loc="left", color=INK, fontweight="bold" if ok[i] else "normal")
+        ax.set_xticks([]); ax.set_yticks([])
+        for sp in ax.spines.values():
+            sp.set_visible(False)
+    fig.suptitle("Recuadro azul: glimpse inicial · Recuadro naranja: glimpse objetivo · Flechas: recorrido · "
+                 "Punto negro: dónde termina", x=0.01, ha="left", fontsize=10, color=INK2, y=1.0)
+    fig.tight_layout()
+    fig.savefig(out, dpi=100)
+    plt.close(fig)
+    return sum(ok), n
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--name", required=True)
@@ -143,4 +186,7 @@ if __name__ == "__main__":
     run = [r for r in runs if r.get("name") == args.name][-1]
     curve(run, f"figures/{args.name}_curva.png")
     trajectories(args.name, f"figures/{args.name}_trayectorias.png")
+    for seed in (1, 2):
+        k, n = examples(args.name, f"figures/{args.name}_ejemplos_{seed}.png", seed=seed)
+        print(f"ejemplos {seed}: llegó en {k} de {n}")
     print("figuras en figures/")
