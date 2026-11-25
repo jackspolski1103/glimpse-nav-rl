@@ -21,7 +21,10 @@ Sin etiquetas humanas en el entrenamiento: glimpses, posiciones, objetivo y reco
 | Acciones | 4 vecinos (arriba, abajo, izquierda, derecha) |
 | Objetivo | Glimpse de otra casilla de la misma imagen, codificado con una copia congelada del encoder |
 | Estado del agente | Embedding actual + embedding objetivo + máscara de visitados |
-| Algoritmo | PPO |
+| Algoritmo | PPO, partiendo de la implementación de CleanRL (adaptada y citada) |
+| Entorno | Núcleo en tensores (episodios en paralelo) + envoltura con la interfaz de Gymnasium |
+| Validación del PPO | Fase 1 también con Stable-Baselines3 sobre el mismo entorno; deben coincidir |
+| Política | MLP pequeño (2 capas ocultas), a propósito: que el resultado dependa del embedding |
 | Recompensa | +1 al llegar, −0,01 por paso (valores iniciales, a ajustar) |
 | Señal de fine-tuning | Solo RL. El world model queda como pérdida auxiliar opcional |
 
@@ -40,6 +43,7 @@ Abierto: la máscara de visitados en coordenadas absolutas le revela al agente s
 ### Fase 1 — Agente PPO con encoder congelado
 - Entorno de rejilla sobre los embeddings precalculados; inicio y objetivo al azar en casillas distintas.
 - Líneas base: paseo aleatorio y camino más corto (cota superior).
+- Comprobaciones del PPO: (1) con las posiciones propia y del objetivo dadas directamente debe llegar al 100 %; (2) Stable-Baselines3 sobre la envoltura de Gymnasium debe dar una tasa de éxito equivalente.
 - **Listo cuando:** la tasa de éxito en imágenes de validación supera claramente al paseo aleatorio.
 
 ### Fase 2 — Fine-tuning del encoder con RL
