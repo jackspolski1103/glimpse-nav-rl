@@ -1,7 +1,7 @@
-"""Fase 0: embeddings de los 49 glimpses de cada imagen con el encoder congelado.
+"""Phase 0: embeddings of the 49 glimpses of each image with the frozen encoder.
 
-Uso: uv run python precompute.py [--limit N]
-Salida: cache/{train,val}.npz con emb (N, 49, 384) float16 y label (N,).
+Usage: uv run python precompute.py [--limit N]
+Output: cache/{train,val}.npz with emb (N, 49, 384) float16 and label (N,).
 """
 import argparse
 from pathlib import Path
@@ -20,8 +20,8 @@ DATA, CACHE = Path("data/imagenette2"), Path("cache")
 @torch.no_grad()
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--limit", type=int, help="solo las primeras N imágenes (prueba rápida)")
-    ap.add_argument("--batch", type=int, default=16, help="imágenes por lote (x49 glimpses)")
+    ap.add_argument("--limit", type=int, help="only the first N images (quick test)")
+    ap.add_argument("--batch", type=int, default=16, help="images per batch (x49 glimpses)")
     args = ap.parse_args()
 
     dev = device()
@@ -38,7 +38,7 @@ def main() -> None:
         embs, labels = [], []
         for img, y in tqdm(DataLoader(ds, batch_size=args.batch, num_workers=4), desc=split):
             g = extract_glimpses(img).flatten(0, 1).to(dev)  # (B*49, 3, 112, 112)
-            z = enc(g).reshape(len(img), -1, enc.num_features)  # token CLS de cada glimpse
+            z = enc(g).reshape(len(img), -1, enc.num_features)  # CLS token of each glimpse
             embs.append(z.cpu().numpy().astype(np.float16))
             labels.append(y.numpy())
         out = CACHE / (f"{split}.npz" if not args.limit else f"{split}_limit{args.limit}.npz")

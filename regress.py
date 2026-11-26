@@ -1,12 +1,12 @@
-"""Línea base sin RL: ajustar el encoder prediciendo directamente el desplazamiento al objetivo.
+"""No-RL baseline: fine-tune the encoder by directly predicting the offset to the goal.
 
-Misma señal que usa el agente (dónde está el objetivo respecto a mí), sin agente ni recompensa: dado el glimpse
-actual (encoder en vivo) y el glimpse objetivo (encoder original congelado), una cabeza MLP predice (Δfila, Δcolumna).
-Presupuesto igualado al de la etapa 2 de finetune.py: mismos glimpses nuevos (--samples), mismas tandas de 8192
-reutilizadas 4 épocas en 4 minilotes, mismos LR, mismo decaimiento, mismo recorte de gradiente, mismos bloques libres.
+Same signal the agent uses (where the goal is relative to me), with no agent and no reward: given the current
+glimpse (live encoder) and the goal glimpse (frozen original encoder), an MLP head predicts (Δrow, Δcolumn).
+Budget matched to stage 2 of finetune.py: same number of new glimpses (--samples), same batches of 8192
+reused for 4 epochs in 4 minibatches, same LRs, same decay, same gradient clipping, same unfrozen blocks.
 
-Uso local (prueba): uv run python regress.py --limit 64 --samples 16384 --warm 50 --name prueba_reg
-Salida en out/: <name>_encoder.pt, <name>_{train,val}.npz, <name>.json
+Local usage (smoke test): uv run python regress.py --limit 64 --samples 16384 --warm 50 --name smoke_reg
+Output in out/: <name>_encoder.pt, <name>_{train,val}.npz, <name>.json
 """
 import argparse
 import json
@@ -28,8 +28,8 @@ def main(argv=None):
     ap.add_argument("--data", default="data/imagenette2")
     ap.add_argument("--name", required=True)
     ap.add_argument("--limit", type=int)
-    ap.add_argument("--warm", type=int, default=2000, help="pasos de la cabeza sola, encoder congelado")
-    ap.add_argument("--samples", type=int, default=6_000_000, help="glimpses nuevos (= pasos de la etapa 2 con RL)")
+    ap.add_argument("--warm", type=int, default=2000, help="steps of the head alone, frozen encoder")
+    ap.add_argument("--samples", type=int, default=6_000_000, help="new glimpses (= stage 2 steps with RL)")
     ap.add_argument("--k", type=int, default=2)
     ap.add_argument("--lr", type=float, default=2.5e-4)
     ap.add_argument("--lr-enc", type=float, default=1e-5)
@@ -51,7 +51,7 @@ def main(argv=None):
     d = e_tr.shape[-1]
     head = nn.Sequential(layer(2 * d, 256), nn.Tanh(), layer(256, 256), nn.Tanh(), layer(256, 2)).to(dev)
 
-    def pairs(n_img, n):  # imagen, casilla actual, casilla objetivo (distinta), desplazamiento normalizado
+    def pairs(n_img, n):  # image, current cell, goal cell (different), normalised offset
         img = torch.randint(n_img, (n,), device=dev)
         cur = torch.randint(GRID * GRID, (n,), device=dev)
         goal = (cur + torch.randint(1, GRID * GRID, (n,), device=dev)) % (GRID * GRID)
@@ -59,7 +59,7 @@ def main(argv=None):
         return img, cur, goal, y
 
     opt = torch.optim.Adam(head.parameters(), lr=args.lr, eps=1e-5)
-    for _ in range(args.warm):  # cabeza sola sobre la tabla del encoder original
+    for _ in range(args.warm):  # head alone on the original encoder's table
         img, cur, goal, y = pairs(n_tr, 2048)
         loss = F.mse_loss(head(torch.cat([t_tr[img, cur], t_tr[img, goal]], 1)), y)
         opt.zero_grad(); loss.backward(); opt.step()
@@ -80,7 +80,7 @@ def main(argv=None):
         m = {"samples": u * args.batch, "err_cells": ((pred - v_y).abs().sum(1).mean() * (GRID - 1)).item(),
              "x_cos": F.cosine_similarity(z, e_va[v_img, v_cur]).mean().item()}
         history.append(m)
-        print(f"glimpses {m['samples']:>10,}  error {m['err_cells']:.3f} casillas  x_cos {m['x_cos']:.4f}  "
+        print(f"glimpses {m['samples']:>10,}  error {m['err_cells']:.3f} cells  x_cos {m['x_cos']:.4f}  "
               f"({time.time() - t0:.0f} s)", flush=True)
 
     log(0)
@@ -103,7 +103,7 @@ def main(argv=None):
     for split, g, n in (("train", g_tr, n_tr), ("val", g_va, n_va)):
         np.savez(out / f"{args.name}_{split}.npz", emb=embed_all(enc, g, n).cpu().numpy().astype(np.float16))
     (out / f"{args.name}.json").write_text(json.dumps({**vars(args), "history": history, "seconds": time.time() - t0}))
-    print(f"listo en {time.time() - t0:.0f} s -> out/{args.name}_*", flush=True)
+    print(f"done in {time.time() - t0:.0f} s -> out/{args.name}_*", flush=True)
 
 
 if __name__ == "__main__":

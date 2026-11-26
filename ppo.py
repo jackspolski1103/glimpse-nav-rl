@@ -1,13 +1,13 @@
-"""PPO para la navegación por glimpses (fase 1: encoder congelado).
+"""PPO for glimpse navigation (phase 1: frozen encoder).
 
-Adaptado de CleanRL, ppo.py (https://github.com/vwxyzjn/cleanrl, Huang et al., JMLR 2022):
-mismos detalles (init ortogonal, Adam eps=1e-5, LR decreciente, GAE, ventaja normalizada,
-pérdida de valor recortada, recorte de gradiente). Diferencia con CleanRL: al agotarse el tiempo
-se continúa con el valor del estado final (Pardo et al., 2018), como hace Stable-Baselines3.
+Adapted from CleanRL, ppo.py (https://github.com/vwxyzjn/cleanrl, Huang et al., JMLR 2022):
+same details (orthogonal init, Adam eps=1e-5, decaying LR, GAE, normalised advantage,
+clipped value loss, gradient clipping). Difference from CleanRL: on timeout we bootstrap
+from the value of the final state (Pardo et al., 2018), as Stable-Baselines3 does.
 
-Uso:
-  uv run python ppo.py --task positions      # comprobación: posiciones dadas, debe llegar a ~100 %
-  uv run python ppo.py --task embeddings     # fase 1 real, sobre cache/{train,val}.npz
+Usage:
+  uv run python ppo.py --task positions      # sanity check: positions given, must reach ~100 %
+  uv run python ppo.py --task embeddings     # the real phase 1, on cache/{train,val}.npz
 """
 import argparse
 import json
@@ -46,12 +46,12 @@ class Agent(nn.Module):
 
 @torch.no_grad()
 def evaluate(env, policy, prep=None):
-    """Un episodio por entorno (el primero), para no sesgar hacia episodios cortos.
+    """One episode per environment (the first), so as not to bias towards short episodes.
 
-    SPL (Anderson et al., 2018) = media de éxito * camino_más_corto / max(pasos, camino_más_corto).
+    SPL (Anderson et al., 2018) = mean of success * shortest_path / max(steps, shortest_path).
     """
     env.reset_where(torch.ones(env.n, dtype=torch.bool, device=env.dev))
-    prep = prep or (lambda env, obs: obs)  # fase 2: sustituye el embedding actual por el del encoder en vivo
+    prep = prep or (lambda env, obs: obs)  # phase 2: replaces the current embedding with the live encoder's
     obs = prep(env, env.observe())
     seen = torch.zeros(env.n, dtype=torch.bool, device=env.dev)
     succ, steps, dist = [], [], []
@@ -70,11 +70,11 @@ def train(env, eval_env, obs_dim, total_steps, num_steps=32, lr=2.5e-4, gamma=0.
           epochs=4, minibatches=4, clip=0.2, ent_coef=0.01, vf_coef=0.5, max_grad=0.5, evals=10,
           train_eval_env=None, ckpt=None, clip_vloss=False, hidden=256,
           agent=None, live=None, lr_enc=1e-5, eval_prep=None, train_eval_prep=None, extra_log=None):
-    """train_eval_env: mide también en imágenes de entrenamiento. ckpt: prefijo para guardar el agente en cada evaluación.
+    """train_eval_env: also measures on training images. ckpt: prefix for saving the agent at each evaluation.
 
-    Fase 2 (live != None): el embedding del glimpse actual sale de un encoder entrenable. En el rollout se
-    guardan sus tokens intermedios (live.tokens) y en la actualización se recalcula el embedding con gradiente
-    (live.fill), de modo que la pérdida de PPO llega al encoder. Ver finetune.py.
+    Phase 2 (live != None): the current glimpse's embedding comes from a trainable encoder. The rollout
+    stores its intermediate tokens (live.tokens) and the update recomputes the embedding with gradient
+    (live.fill), so that the PPO loss reaches the encoder. See finetune.py.
     """
     dev, n = env.dev, env.n
     agent = agent or Agent(obs_dim, hidden).to(dev)
@@ -110,8 +110,8 @@ def train(env, eval_env, obs_dim, total_steps, num_steps=32, lr=2.5e-4, gamma=0.
         history.append(m)
         tr = f"  (train {m['train_success'] * 100:5.1f} %)" if train_eval_env else ""
         tr += "".join(f"  {k} {v:.4f}" for k, v in m.items() if k.startswith("x_"))
-        print(f"pasos {m['steps']:>10,}  éxito {m['success'] * 100:5.1f} %{tr}  SPL {m['spl']:.3f}  "
-              f"({u * batch / max(time.time() - t0, 1e-9):,.0f} pasos/s)", flush=True)
+        print(f"steps {m['steps']:>10,}  success {m['success'] * 100:5.1f} %{tr}  SPL {m['spl']:.3f}  "
+              f"({u * batch / max(time.time() - t0, 1e-9):,.0f} steps/s)", flush=True)
 
     log(0)
     for u in range(1, updates + 1):
@@ -124,7 +124,7 @@ def train(env, eval_env, obs_dim, total_steps, num_steps=32, lr=2.5e-4, gamma=0.
             with torch.no_grad():
                 a, lp, _, v = agent.act(next_obs)
             obs, r, d, info = env.step(a)
-            if info["timeout"].any():  # tiempo agotado no es un estado terminal: se continúa con V(s)
+            if info["timeout"].any():  # a timeout is not a terminal state: bootstrap from V(s)
                 with torch.no_grad():
                     fo, to = info["final_obs"], info["timeout"]
                     if live:
@@ -148,7 +148,7 @@ def train(env, eval_env, obs_dim, total_steps, num_steps=32, lr=2.5e-4, gamma=0.
         tk = f(tok_b) if live else None
         for _ in range(epochs):
             for mb in torch.randperm(batch, device=dev).split(batch // minibatches):
-                x = live.fill(o[mb], tk[mb]) if live else o[mb]  # con gradiente hacia el encoder
+                x = live.fill(o[mb], tk[mb]) if live else o[mb]  # with gradient into the encoder
                 _, newlp, ent, newv = agent.act(x, a[mb])
                 ratio = (newlp - lp[mb]).exp()
                 madv = (ad[mb] - ad[mb].mean()) / (ad[mb].std() + 1e-8)
@@ -179,8 +179,8 @@ def table_embed(split, suffix, dev, stats=None, prefix="cache/"):
 
 
 def make_task(task, suffix, dev, prefix="cache/"):
-    """-> (embed_train, n_train), (embed_val, n_val), obs_dim (con el aviso de choque)"""
-    if task == "positions":  # el "embedding" es la posición misma: la tarea se vuelve trivial
+    """-> (embed_train, n_train), (embed_val, n_val), obs_dim (with the bump signal)"""
+    if task == "positions":  # the "embedding" is the position itself: the task becomes trivial
         eye = torch.eye(GRID * GRID, device=dev)
         emb = lambda i, c: eye[c]
         return (emb, 1), (emb, 1), 2 * GRID * GRID + EGO * EGO + 4
@@ -193,17 +193,17 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--task", choices=["positions", "embeddings"], default="embeddings")
     ap.add_argument("--suffix", default="")
-    ap.add_argument("--emb", default="cache/", help="prefijo de los embeddings: <emb>{train,val}.npz "
-                    "(encoder original: cache/; ajustado: out/<nombre>_)")
+    ap.add_argument("--emb", default="cache/", help="embeddings prefix: <emb>{train,val}.npz "
+                    "(original encoder: cache/; fine-tuned: out/<name>_)")
     ap.add_argument("--steps", type=int, default=2_000_000)
     ap.add_argument("--envs", type=int, default=256)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--evals", type=int, default=10)
     ap.add_argument("--hidden", type=int, default=256)
-    ap.add_argument("--walls", choices=["bump", "sensor", "none"], default="bump", help="información de borde (ablación)")
-    ap.add_argument("--clip-vloss", action="store_true", help="recorte de la pérdida de valor (CleanRL)")
-    ap.add_argument("--name", help="guarda checkpoints en checkpoints/<name>_<pasos>.pt")
+    ap.add_argument("--walls", choices=["bump", "sensor", "none"], default="bump", help="border information (ablation)")
+    ap.add_argument("--clip-vloss", action="store_true", help="value loss clipping (CleanRL)")
+    ap.add_argument("--name", help="saves checkpoints to checkpoints/<name>_<steps>.pt")
     args = ap.parse_args()
     torch.manual_seed(args.seed)
     dev = args.device
@@ -213,7 +213,7 @@ def main():
     env = GlimpseNav(emb_tr, n_tr, args.envs, dev, walls=None if args.walls == "none" else args.walls)
     eval_env = GlimpseNav(emb_va, n_va, 4096, dev, walls=None if args.walls == "none" else args.walls)
     rand = evaluate(eval_env, lambda o: torch.randint(4, (len(o),), device=dev))
-    print(f"paseo aleatorio: éxito {rand['success'] * 100:.1f} %  SPL {rand['spl']:.3f}")
+    print(f"random walk: success {rand['success'] * 100:.1f} %  SPL {rand['spl']:.3f}")
     ckpt = None
     if args.name:
         Path("checkpoints").mkdir(exist_ok=True)

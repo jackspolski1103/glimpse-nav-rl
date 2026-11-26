@@ -1,10 +1,10 @@
-"""Experimento B: ¿perdió información general el encoder ajustado?
+"""Experiment B: did the fine-tuned encoder lose general information?
 
-Imagen completa (224 px), encoder congelado, como se evalúa DINOv2. Mismo script para ambos encoders.
-- k-NN (k=20, coseno, voto ponderado) sobre el token CLS: Imagenette y Imagewoof (no usado en el ajuste).
-- Similitud entre los embeddings del encoder original y los del ajustado sobre las mismas imágenes (coseno y CKA lineal).
+Full image (224 px), frozen encoder, the way DINOv2 is evaluated. Same script for both encoders.
+- k-NN (k=20, cosine, weighted vote) on the CLS token: Imagenette and Imagewoof (not used in the fine-tuning).
+- Similarity between the original encoder's embeddings and the fine-tuned one's on the same images (cosine and linear CKA).
 
-Uso: uv run python eval_repr.py out/ft_k2_lr1e-5_encoder.pt [más encoders...]
+Usage: uv run python eval_repr.py out/ft_k2_lr1e-5_encoder.pt [more encoders...]
 """
 import json
 import sys
@@ -24,7 +24,7 @@ TF = transforms.Compose([transforms.Resize(256), transforms.CenterCrop(224), tra
 
 @torch.no_grad()
 def features(models, root, split):
-    """Una sola pasada por los datos para todos los encoders. -> {nombre: (N, D)}, etiquetas"""
+    """A single pass over the data for all encoders. -> {name: (N, D)}, labels"""
     dev = device()
     feats, labels = {k: [] for k in models}, []
     for x, y in DataLoader(datasets.ImageFolder(Path(root) / split, TF), batch_size=128, num_workers=8):
@@ -58,7 +58,7 @@ def main():
     results = {k: {} for k in models}
     for ds, root in DATASETS.items():
         if not Path(root).exists():
-            print(f"(sin {ds}: falta {root})")
+            print(f"(no {ds}: {root} is missing)")
             continue
         ftr, ytr = features(models, root, "train")
         fva, yva = features(models, root, "val")

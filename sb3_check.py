@@ -1,7 +1,7 @@
-"""Comprobación cruzada: PPO de Stable-Baselines3 sobre el mismo entorno (vía Gymnasium).
+"""Cross-check: Stable-Baselines3 PPO on the same environment (via Gymnasium).
 
-Mismos hiperparámetros que ppo.py y misma función de evaluación, para comparar directamente.
-Uso: uv run python sb3_check.py --task embeddings
+Same hyperparameters as ppo.py and same evaluation function, for a direct comparison.
+Usage: uv run python sb3_check.py --task embeddings
 """
 import argparse
 import json
@@ -38,7 +38,7 @@ def main():
 
     eval_env = GlimpseNav(emb_va, n_va, 4096)
     final = evaluate(eval_env, lambda o: model.policy(o)[0])
-    print(f"SB3 PPO, {args.steps:,} pasos: éxito {final['success'] * 100:.1f} %  SPL {final['spl']:.3f}")
+    print(f"SB3 PPO, {args.steps:,} steps: success {final['success'] * 100:.1f} %  SPL {final['spl']:.3f}")
     Path("results").mkdir(exist_ok=True)
     with open("results/sb3.jsonl", "a") as fh:
         fh.write(json.dumps({**vars(args), "final": final}) + "\n")

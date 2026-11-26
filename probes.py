@@ -1,7 +1,7 @@
-"""Fase 0: ¿cuánta información espacial hay en los embeddings congelados?
+"""Phase 0: how much spatial information is there in the frozen embeddings?
 
-Uso: uv run python probes.py [--suffix _limit200] [--emb out/ft_k2_lr1e-5_]
-Entrena en imágenes de train y evalúa en imágenes de val (no vistas).
+Usage: uv run python probes.py [--suffix _limit200] [--emb out/ft_k2_lr1e-5_]
+Trains on train images and evaluates on val images (unseen).
 """
 import argparse
 
@@ -13,7 +13,7 @@ from torch import nn
 from glimpse import GRID, device
 
 DEV = device()
-MOVES = torch.tensor([[-1, 0], [1, 0], [0, -1], [0, 1]], device=DEV)  # arriba, abajo, izq, der
+MOVES = torch.tensor([[-1, 0], [1, 0], [0, -1], [0, 1]], device=DEV)  # up, down, left, right
 
 
 def load(split: str, suffix: str, prefix: str = "cache/") -> torch.Tensor:
@@ -37,7 +37,7 @@ def batch_position(E, n):
 
 
 def batch_neighbor(E, n):
-    """Par (actual, vecino) -> ¿en qué dirección está el vecino?"""
+    """Pair (current, neighbour) -> in which direction is the neighbour?"""
     i, (r, c) = torch.randint(len(E), (n,), device=DEV), rc(n)
     d = torch.randint(4, (n,), device=DEV)
     r2, c2 = r + MOVES[d, 0], c + MOVES[d, 1]
@@ -47,7 +47,7 @@ def batch_neighbor(E, n):
 
 
 def batch_offset(E, n):
-    """Par cualquiera de la misma imagen -> desplazamiento (filas, columnas)."""
+    """Any pair from the same image -> offset (rows, columns)."""
     i, (r, c), (r2, c2) = torch.randint(len(E), (n,), device=DEV), rc(n), rc(n)
     x = torch.cat([E[i, r * GRID + c], E[i, r2 * GRID + c2]], 1)
     return x, torch.stack([r2 - r, c2 - c], 1).float()
@@ -71,7 +71,7 @@ def main(argv=None) -> dict:
     ap = argparse.ArgumentParser()
     ap.add_argument("--suffix", default="")
     ap.add_argument("--steps", type=int, default=3000)
-    ap.add_argument("--emb", default="cache/", help="prefijo de los embeddings (como en ppo.py)")
+    ap.add_argument("--emb", default="cache/", help="embeddings prefix (as in ppo.py)")
     args = ap.parse_args(argv)
     torch.manual_seed(0)
     res = {}
@@ -82,23 +82,23 @@ def main(argv=None) -> dict:
     d = train.shape[-1]
     acc = lambda out, y: (out.argmax(1) == y).float().mean().item() * 100
 
-    print(f"imágenes train/val: {len(train)}/{len(val)}  dim: {d}  dispositivo: {DEV}")
+    print(f"train/val images: {len(train)}/{len(val)}  dim: {d}  device: {DEV}")
 
     out, y = fit(net(d, GRID * GRID), batch_position, F.cross_entropy, train, val, args.steps)
-    res["posicion"] = acc(out, y)
-    print(f"posición absoluta desde 1 glimpse (lineal):   {acc(out, y):5.1f} %   azar {100 / GRID**2:.1f} %")
+    res["position"] = acc(out, y)
+    print(f"absolute position from 1 glimpse (linear):   {acc(out, y):5.1f} %   chance {100 / GRID**2:.1f} %")
 
-    for name, h in (("lineal", 0), ("MLP", 512)):
+    for name, h in (("linear", 0), ("MLP", 512)):
         out, y = fit(net(2 * d, 4, h), batch_neighbor, F.cross_entropy, train, val, args.steps)
-        res[f"vecino_{name}"] = acc(out, y)
-        print(f"dirección del vecino desde 2 glimpses ({name}): {acc(out, y):5.1f} %   azar 25.0 %")
+        res[f"neighbour_{name.lower()}"] = acc(out, y)
+        print(f"neighbour direction from 2 glimpses ({name}): {acc(out, y):5.1f} %   chance 25.0 %")
 
     out, y = fit(net(2 * d, 2, 512), batch_offset, F.mse_loss, train, val, args.steps)
     err = (out.round() - y).abs().sum(1).mean().item()
     base = y.abs().sum(1).mean().item()
     exact = (out.round() == y).all(1).float().mean().item() * 100
-    print(f"desplazamiento entre 2 glimpses (MLP): error {err:.2f} casillas (sin información: {base:.2f}), exacto {exact:.1f} %")
-    return {**res, "desplazamiento_err": err, "desplazamiento_exacto": exact}
+    print(f"offset between 2 glimpses (MLP): error {err:.2f} cells (no information: {base:.2f}), exact {exact:.1f} %")
+    return {**res, "offset_err": err, "offset_exact": exact}
 
 
 if __name__ == "__main__":

@@ -1,17 +1,17 @@
-"""Lanza finetune.py en GPUs de Modal (fase 2).
+"""Launches finetune.py on Modal GPUs (phase 2).
 
-Uso (varias corridas en paralelo, separadas por ';', cada una 'nombre:argumentos'):
+Usage (several runs in parallel, separated by ';', each one 'name:arguments'):
   uv run modal run --detach modal_app.py::main --runs "ft_k2_lr1e-5:--k 2 --lr-enc 1e-5;ft_k2_lr3e-5:--k 2 --lr-enc 3e-5"
 
-Experimentos A y B (agentes nuevos sobre cada encoder congelado; k-NN con imagen completa):
+Experiments A and B (new agents on each frozen encoder; k-NN with the full image):
   uv run modal run --detach modal_app.py::experiments
   uv run modal run --detach modal_app.py::experiments --encs reg_k2_lr1e-5,reg_k2_lr3e-5 --tag _reg
-Sondas espaciales + tarea de transferencia sin solape (todo orquestado en Modal):
+Spatial probes + transfer task without overlap (all orchestrated on Modal):
   uv run modal run --detach modal_app.py::run_transfer
-Línea base sin RL (regress.py): igual que el fine-tuning, con --module regress
+No-RL baseline (regress.py): same as the fine-tuning, with --module regress
 
-Los resultados quedan en el Volume 'glimpse-nav-rl', carpeta out/:
-  uv run modal volume get glimpse-nav-rl out/<archivo> out/
+Results are stored in the 'glimpse-nav-rl' Volume, folder out/:
+  uv run modal volume get glimpse-nav-rl out/<file> out/
 """
 import modal
 
@@ -28,14 +28,14 @@ DATA_URL = "https://s3.amazonaws.com/fast-ai-imageclas/imagenette2.tgz"
 
 @app.function(image=image, volumes={"/vol": vol}, timeout=3600, cpu=8, memory=32768)
 def prepare():
-    """Una sola vez: descarga Imagenette y guarda los píxeles reescalados en el Volume."""
+    """One-off: downloads Imagenette and stores the resized pixels in the Volume."""
     import os
     import subprocess
     from pathlib import Path
 
     os.chdir("/vol")
     if Path("cache/pixels_train.npy").exists() and Path("cache/pixels_val.npy").exists():
-        print("píxeles ya preparados")
+        print("pixels already prepared")
         return
     subprocess.run(f"curl -sSfL --retry 10 {DATA_URL} | tar -xz -C /tmp", shell=True, check=True)
     from finetune import load_pixels
@@ -45,14 +45,14 @@ def prepare():
     vol.commit()
 
 
-# Tope de gasto: ~1,4 USD/h por corrida (GPU A10 + 2 CPU + 24 GB). El timeout acota el peor caso.
+# Spending cap: ~1.4 USD/h per run (A10 GPU + 2 CPU + 24 GB). The timeout bounds the worst case.
 @app.function(image=image, gpu="A10", volumes={"/vol": vol}, timeout=4500, cpu=2, memory=24576)
 def run(argv: list[str], module: str = "finetune"):
     import importlib
     import os
 
     os.chdir("/vol")
-    importlib.import_module(module).main(argv)  # finetune (RL) o regress (línea base sin RL)
+    importlib.import_module(module).main(argv)  # finetune (RL) or regress (no-RL baseline)
     vol.commit()
 
 
@@ -62,20 +62,20 @@ def main(runs: str, module: str = "finetune"):
     for spec in runs.split(";"):
         name, _, extra = spec.partition(":")
         call = run.spawn(["--name", name, *extra.split()], module)
-        print(f"lanzado {name}: {call.object_id}")
+        print(f"launched {name}: {call.object_id}")
 
 
 ENCODERS = ["base", "ft_k2_lr3e-6", "ft_k2_lr1e-5", "ft_k2_lr3e-5"]
 
 
-# Experimento A: solo CPU (el encoder está congelado, se usan las tablas de embeddings). ~0,2 USD/h por corrida.
+# Experiment A: CPU only (the encoder is frozen, the embedding tables are used). ~0.2 USD/h per run.
 @app.function(image=image, volumes={"/vol": vol}, timeout=2 * 3600, cpu=4, memory=8192)
 def exp_a(enc: str, seed: int, steps: int = 10_000_000):
     import os
     import shutil
     import sys
 
-    work = f"/tmp/{enc}_s{seed}"  # carpeta propia: ppo.py escribe results/ppo.jsonl y las corridas van en paralelo
+    work = f"/tmp/{enc}_s{seed}"  # own folder: ppo.py writes results/ppo.jsonl and the runs go in parallel
     os.makedirs(work)
     os.chdir(work)
     sys.argv = ["ppo.py", "--emb", f"/vol/out/{enc}_", "--steps", str(steps), "--evals", "20", "--seed", str(seed), "--name", "a"]
@@ -84,7 +84,7 @@ def exp_a(enc: str, seed: int, steps: int = 10_000_000):
     ppo.main()
     os.makedirs("/vol/results", exist_ok=True)
     shutil.copy("results/ppo.jsonl", f"/vol/results/expA_{enc}_s{seed}.jsonl")
-    last = max(os.listdir("checkpoints"), key=lambda f: int(f.rsplit("_", 1)[1][:-3]))  # agente final, para figuras
+    last = max(os.listdir("checkpoints"), key=lambda f: int(f.rsplit("_", 1)[1][:-3]))  # final agent, for figures
     shutil.copy(f"checkpoints/{last}", f"/vol/out/expA_{enc}_s{seed}_agent.pt")
     vol.commit()
 
@@ -115,8 +115,8 @@ ALL = ENCODERS + [f"reg_k2_lr{lr}" for lr in ("3e-7", "1e-6", "3e-6", "1e-5", "3
 
 @app.function(image=image, gpu="A10", volumes={"/vol": vol}, timeout=3600, cpu=8, memory=16384)
 def z0_tables(encs: list[str]):
-    """Tarea de transferencia: imagen a 784 px, rejilla 7x7 de glimpses de 112 px SIN solape (zoom 1,75x).
-    Guarda out/z0_<enc>_{train,val}.npz. Ningún encoder se ajustó con esta disposición."""
+    """Transfer task: image at 784 px, 7x7 grid of 112 px glimpses with NO overlap (1.75x zoom).
+    Saves out/z0_<enc>_{train,val}.npz. No encoder was fine-tuned with this layout."""
     import os
     import subprocess
 
@@ -148,13 +148,13 @@ def z0_tables(encs: list[str]):
                     feats[e].append(m(x).float().view(b, GRID * GRID, -1).half().cpu())
         for e in encs:
             np.savez(f"/vol/out/z0_{e}_{split}.npz", emb=torch.cat(feats[e]).numpy())
-        print(split, "listo", flush=True)
+        print(split, "done", flush=True)
     vol.commit()
 
 
 @app.function(image=image, volumes={"/vol": vol}, timeout=2 * 3600, cpu=4, memory=8192)
 def probe(prefixes: list[str], tag: str):
-    """Sondas de la fase 0 (posición, dirección del vecino, desplazamiento) sobre tablas de embeddings."""
+    """Phase 0 probes (position, neighbour direction, offset) on embedding tables."""
     import json
     import os
 
@@ -170,7 +170,7 @@ def probe(prefixes: list[str], tag: str):
     vol.commit()
 
 
-# Orquestador en Modal (no depende de que el Mac siga despierto).
+# Orchestrator on Modal (does not depend on the Mac staying awake).
 @app.function(image=image, volumes={"/vol": vol}, timeout=4 * 3600, cpu=0.25)
 def transfer(nav: list[str], seeds: int = 2, steps: int = 5_000_000):
     z0_tables.remote(ALL)
@@ -182,7 +182,7 @@ def transfer(nav: list[str], seeds: int = 2, steps: int = 5_000_000):
 
 @app.function(image=image, volumes={"/vol": vol}, timeout=4 * 3600, cpu=0.25)
 def chain(name: str, argv: list[str], module: str = "finetune", seeds: int = 3):
-    """Un ajuste y, al terminar, sus experimentos A y B. Orquestado en Modal."""
+    """One fine-tuning run and, when it finishes, its experiments A and B. Orchestrated on Modal."""
     run.remote(["--name", name, *argv], module)
     calls = [exp_b.spawn([name], f"_{name}")] + [exp_a.spawn(name, s) for s in range(seeds)]
     for c in calls:
@@ -191,17 +191,17 @@ def chain(name: str, argv: list[str], module: str = "finetune", seeds: int = 3):
 
 @app.local_entrypoint()
 def run_chain(name: str, args: str, module: str = "finetune"):
-    print("cadena:", chain.spawn(name, args.split(), module).object_id)
+    print("chain:", chain.spawn(name, args.split(), module).object_id)
 
 
 @app.local_entrypoint()
 def run_transfer(nav: str = "base,ft_k2_lr1e-5,reg_k2_lr3e-6"):
-    print("transferencia:", transfer.spawn(nav.split(",")).object_id)
+    print("transfer:", transfer.spawn(nav.split(",")).object_id)
 
 
 @app.local_entrypoint()
 def experiments(seeds: int = 3, steps: int = 10_000_000, b: bool = True, encs: str = "", tag: str = ""):
-    """encs: encoders separados por coma (por defecto, el original y los tres ajustados con RL)."""
+    """encs: comma-separated encoders (by default, the original and the three RL fine-tuned ones)."""
     encs = encs.split(",") if encs else ENCODERS
     if b:
         print("B:", exp_b.spawn([e for e in encs if e != "base"], tag).object_id)

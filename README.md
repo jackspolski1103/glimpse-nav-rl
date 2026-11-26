@@ -2,8 +2,8 @@
 
 Fine-tuning an image encoder (DINOv2 ViT-S/14) with RL only. A PPO agent moves over an image seeing 112 px crops (glimpses) until it reaches a goal glimpse; the PPO loss is backpropagated into the last two blocks of the encoder. The encoder never sees the full image during fine-tuning.
 
-- Plan and design decisions (in Spanish): [ROADMAP.md](ROADMAP.md)
-- Chronological log of every step, command and result (in Spanish): [BITACORA.md](BITACORA.md)
+- Plan and design decisions: [ROADMAP.md](ROADMAP.md)
+- Chronological log of every step, command and result: [LOG.md](LOG.md)
 
 ## Conclusion
 
@@ -32,7 +32,7 @@ Other results (details in the log):
 - **Memorization:** regression at high LR overfits (90.5 % on train, 76.1 % on validation); RL does not.
 
 ![Experiments A and B](figures/expAB.png)
-![Before and after](figures/antes_despues.png)
+![Before and after](figures/before_after.png)
 
 ## Limitations
 
@@ -49,7 +49,7 @@ One encoder, one fine-tuning dataset (Imagenette) and one forgetting measure (fu
 | `eval_repr.py` | Experiment B (k-NN, cosine, CKA) |
 | `probes.py` | Spatial probes |
 | `modal_app.py` | Launches all of the above on Modal |
-| `fig_ab.py`, `fig_antes_despues.py`, `viz.py`, `analysis.py` | Figures and analysis |
+| `fig_ab.py`, `fig_before_after.py`, `viz.py`, `analysis.py` | Figures and analysis |
 | `results/` | Raw results of every run |
 
 ## Reproducing
@@ -64,4 +64,14 @@ uv run modal run --detach modal_app.py::run_transfer                            
 uv run python fig_ab.py                                                                  # figure
 ```
 
-The fine-tuned encoder weights are not in the repo: they live in the Modal Volume `glimpse-nav-rl`, folder `out/` (`<name>_encoder.pt`).
+## Weights
+
+The nine fine-tuned encoders (88 MB each) are attached to the [`weights-v1` release](https://github.com/jackspolski1103/glimpse-nav-rl/releases/tag/weights-v1). `ft_*` are fine-tuned with RL, `reg_*` with the regression baseline; the suffix is the encoder learning rate.
+
+```python
+import torch
+from glimpse import load_encoder
+
+enc = load_encoder()
+enc.load_state_dict(torch.load("ft_k2_lr1e-5_encoder.pt", map_location="cpu"))
+```

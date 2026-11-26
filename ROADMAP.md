@@ -1,110 +1,110 @@
-# Roadmap: fine-tuning de un encoder de imágenes con RL de navegación por glimpses
+# Roadmap: fine-tuning an image encoder with glimpse-navigation RL
 
 ## Idea
 
-Un agente de RL aprende a moverse por una imagen viendo solo recortes (glimpses) hasta llegar a un glimpse objetivo. El gradiente de RL ajusta el encoder. Preguntas:
+An RL agent learns to move around an image seeing only crops (glimpses) until it reaches a target glimpse. The RL gradient fine-tunes the encoder. Questions:
 
-1. ¿El encoder ajustado con RL navega mejor que el original? (Experimento A)
-2. ¿Cuánta información general pierde el encoder por ese ajuste? (Experimento B)
+1. Does the encoder fine-tuned with RL navigate better than the original? (Experiment A)
+2. How much general information does the encoder lose from that fine-tuning? (Experiment B)
 
-Sin etiquetas humanas en el entrenamiento: glimpses, posiciones, objetivo y recompensa salen de la propia imagen.
+No human labels in training: glimpses, positions, target and reward all come from the image itself.
 
-## Decisiones tomadas
+## Decisions made
 
-| Pieza | Decisión |
+| Piece | Decision |
 |---|---|
-| Encoder | DINOv2 ViT-S/14 (abierto). DINOv3 queda como mejora posterior |
-| Dataset | Imagenette, versión de tamaño completo |
-| Imagen | Reescalada a 448×448 |
-| Glimpse | 112×112 px (8×8 parches internos del ViT), codificado por separado; embedding = token CLS |
-| Paso | 56 px (solape 50 %) → rejilla 7×7 = 49 posiciones. Variante: 84 px → 5×5 |
-| Acciones | 4 vecinos (arriba, abajo, izquierda, derecha) |
-| Objetivo | Glimpse de otra casilla de la misma imagen, codificado con una copia congelada del encoder |
-| Estado del agente | Embedding actual + embedding objetivo + máscara egocéntrica de visitados + aviso de choque (dirección del último movimiento bloqueado por el borde) |
-| Algoritmo | PPO, partiendo de la implementación de CleanRL (adaptada y citada) |
-| Entorno | Núcleo en tensores (episodios en paralelo) + envoltura con la interfaz de Gymnasium |
-| Validación del PPO | Fase 1 también con Stable-Baselines3 sobre el mismo entorno; deben coincidir |
-| Política | MLP pequeño (2 capas ocultas), a propósito: que el resultado dependa del embedding |
-| Recompensa | +1 al llegar, −0,01 por paso (valores iniciales, a ajustar) |
-| Señal de fine-tuning | Solo RL. El world model queda como pérdida auxiliar opcional |
+| Encoder | DINOv2 ViT-S/14 (open). DINOv3 is left as a later improvement |
+| Dataset | Imagenette, full-size version |
+| Image | Resized to 448×448 |
+| Glimpse | 112×112 px (8×8 internal ViT patches), encoded separately; embedding = CLS token |
+| Stride | 56 px (50 % overlap) → 7×7 grid = 49 positions. Variant: 84 px → 5×5 |
+| Actions | 4 neighbours (up, down, left, right) |
+| Target | Glimpse from another cell of the same image, encoded with a frozen copy of the encoder |
+| Agent state | Current embedding + target embedding + egocentric visited mask + bump signal (direction of the last move blocked by the border) |
+| Algorithm | PPO, starting from the CleanRL implementation (adapted and cited) |
+| Environment | Tensor-based core (episodes in parallel) + wrapper with the Gymnasium interface |
+| PPO validation | Phase 1 also with Stable-Baselines3 on the same environment; they must agree |
+| Policy | Small MLP (2 hidden layers), on purpose: so that the result depends on the embedding |
+| Reward | +1 on arrival, −0.01 per step (initial values, to be tuned) |
+| Fine-tuning signal | RL only. The world model is left as an optional auxiliary loss |
 
-Resuelto en la fase 1: la máscara de visitados es egocéntrica (no revela la posición absoluta) y el agente percibe el borde solo al chocar con él.
+Resolved in phase 1: the visited mask is egocentric (it does not reveal the absolute position) and the agent perceives the border only when it bumps into it.
 
-## Fases
+## Phases
 
-### Fase 0 — Entorno y embeddings precalculados
-- Entorno con `uv`, PyTorch (MPS), descarga de DINOv2 e Imagenette.
-- Precalcular los 49 embeddings por imagen con el encoder congelado y guardarlos.
-- Mediciones previas (probes lineales sobre embeddings congelados):
-  - posición de la casilla a partir de un solo glimpse (se espera cerca del azar, 1/49);
-  - desplazamiento relativo entre dos glimpses de la misma imagen.
-- **Listo cuando:** embeddings guardados y los dos números medidos.
+### Phase 0 — Environment and precomputed embeddings
+- Environment with `uv`, PyTorch (MPS), download of DINOv2 and Imagenette.
+- Precompute the 49 embeddings per image with the frozen encoder and save them.
+- Preliminary measurements (linear probes on frozen embeddings):
+  - position of the cell from a single glimpse (expected near chance, 1/49);
+  - relative offset between two glimpses of the same image.
+- **Done when:** embeddings saved and both numbers measured.
 
-### Fase 1 — Agente PPO con encoder congelado
-- Entorno de rejilla sobre los embeddings precalculados; inicio y objetivo al azar en casillas distintas.
-- Líneas base: paseo aleatorio y camino más corto (cota superior).
-- Comprobaciones del PPO: (1) con las posiciones propia y del objetivo dadas directamente debe llegar al 100 %; (2) Stable-Baselines3 sobre la envoltura de Gymnasium debe dar una tasa de éxito equivalente.
-- **Listo cuando:** la tasa de éxito en imágenes de validación supera claramente al paseo aleatorio.
+### Phase 1 — PPO agent with frozen encoder
+- Grid environment on the precomputed embeddings; random start and target in different cells.
+- Baselines: random walk and shortest path (upper bound).
+- PPO checks: (1) with its own position and the target's given directly it must reach 100 %; (2) Stable-Baselines3 on the Gymnasium wrapper must give an equivalent success rate.
+- **Done when:** the success rate on validation images clearly beats the random walk.
 
-### Fase 2 — Fine-tuning del encoder con RL
-- Partir del agente de la fase 1. Liberar los últimos bloques del encoder con LR 10–100 veces menor que el de la cabeza.
-- El encoder corre en cada paso (ya no hay precálculo). El objetivo se codifica con la copia congelada.
-- **Listo cuando:** el entrenamiento es estable y el éxito es igual o mayor que en la fase 1. Guardar el encoder ajustado.
+### Phase 2 — Fine-tuning the encoder with RL
+- Start from the phase 1 agent. Unfreeze the last blocks of the encoder with an LR 10–100 times lower than the head's.
+- The encoder runs at every step (no more precomputation). The target is encoded with the frozen copy.
+- **Done when:** training is stable and success is equal to or higher than in phase 1. Save the fine-tuned encoder.
 
-### Fase 3 — Experimento A: ¿navega mejor?
-- Dos encoders congelados: original y ajustado. Un agente nuevo desde cero sobre cada uno.
-- Misma arquitectura, mismos pasos, mismas imágenes, al menos 3 semillas.
-- Métricas por posición: tasa de éxito y pasos usados / camino más corto.
-- No comparar distancias en latente entre encoders (un colapso parcial las falsea).
+### Phase 3 — Experiment A: does it navigate better?
+- Two frozen encoders: original and fine-tuned. A new agent from scratch on each.
+- Same architecture, same steps, same images, at least 3 seeds.
+- Metrics per position: success rate and steps used / shortest path.
+- Do not compare latent distances between encoders (a partial collapse distorts them).
 
-### Fase 4 — Experimento B: ¿qué perdió?
-Mismo script sobre los dos encoders, con imagen completa y encoder congelado:
-- k-NN de clasificación en un dataset no usado en el fine-tuning (Imagewoof; Imagenette está casi saturado para DINOv2).
-- Segmentación con capa lineal (Pascal VOC).
-- Deriva directa: similitud coseno / CKA entre embeddings de ambos encoders sobre las mismas imágenes.
+### Phase 4 — Experiment B: what did it lose?
+Same script on both encoders, with the full image and a frozen encoder:
+- Classification k-NN on a dataset not used in the fine-tuning (Imagewoof; Imagenette is almost saturated for DINOv2).
+- Segmentation with a linear layer (Pascal VOC).
+- Direct drift: cosine similarity / CKA between embeddings of both encoders on the same images.
 
-### Fase 5 — Extensiones (solo si las fases 3 y 4 muestran algo)
-- **Línea base sin RL:** ajustar el encoder con regresión directa del desplazamiento al objetivo (ver Trabajo relacionado).
-- Grados de fine-tuning (LoRA, más bloques, todo libre) → curva "ganancia en navegación vs. pérdida general".
-- Pérdida auxiliar de world model (predicción latente del siguiente glimpse) y comparación RL / WM / ambos.
-- Menos solape (paso de 84 px), rejilla de embeddings visitados como memoria, DINOv3.
+### Phase 5 — Extensions (only if phases 3 and 4 show something)
+- **Baseline without RL:** fine-tune the encoder with direct regression of the offset to the target (see Related work).
+- Degrees of fine-tuning (LoRA, more blocks, everything unfrozen) → "navigation gain vs. general loss" curve.
+- World-model auxiliary loss (latent prediction of the next glimpse) and RL / WM / both comparison.
+- Less overlap (84 px stride), grid of visited embeddings as memory, DINOv3.
 
-## Cómputo
+## Compute
 
-- **Fases 0, 1, 3 y 4:** en el Mac (MPS). El encoder es pequeño y los embeddings se precalculan una vez.
-- **Fase 2 (y la 5):** el encoder corre con gradiente en cada paso; aquí es donde puede hacer falta GPU alquilada.
-- **Servicio elegido:** Modal (se lanza desde la terminal con `modal run`, sin gestionar máquinas ni SSH, pago por uso). Requiere cuenta y un inicio de sesión único con `modal setup`.
-- Escribir el código de entrenamiento independiente del dispositivo (`cuda` / `mps` / `cpu`) desde el principio, para que el mismo script corra en el Mac y en Modal.
+- **Phases 0, 1, 3 and 4:** on the Mac (MPS). The encoder is small and the embeddings are precomputed once.
+- **Phase 2 (and 5):** the encoder runs with gradient at every step; this is where a rented GPU may be needed.
+- **Chosen service:** Modal (launched from the terminal with `modal run`, no machines or SSH to manage, pay per use). Requires an account and a one-time login with `modal setup`.
+- Write the training code device-independent (`cuda` / `mps` / `cpu`) from the start, so that the same script runs on the Mac and on Modal.
 
-## Riesgos
+## Risks
 
-- **Señal de RL ruidosa:** puede dañar el encoder. Mitigación: dos fases, LR bajo, pocos bloques libres.
-- **Atajos:** con solape, el encoder puede especializarse en casar bordes. Lo detecta el experimento B.
-- **Tarea demasiado fácil o difícil:** ajustar solape y longitud máxima del episodio según la fase 1.
+- **Noisy RL signal:** it can damage the encoder. Mitigation: two phases, low LR, few unfrozen blocks.
+- **Shortcuts:** with overlap, the encoder can specialize in matching edges. Experiment B detects this.
+- **Task too easy or too hard:** adjust overlap and maximum episode length according to phase 1.
 
-## Trabajo relacionado
+## Related work
 
-Búsqueda hecha el 2026-11-25 (seis consultas web, no exhaustiva). **No apareció ningún trabajo con la combinación completa**: navegación a un glimpse objetivo + fine-tuning de un encoder preentrenado con solo RL + medición del olvido. Lo más cercano:
+Search done on 2026-11-25 (six web queries, not exhaustive). **No work with the full combination turned up**: navigation to a target glimpse + fine-tuning a pretrained encoder with RL only + measuring forgetting. The closest:
 
-| Trabajo | Qué comparte | En qué difiere |
+| Work | What it shares | How it differs |
 |---|---|---|
-| [seq-JEPA](https://arxiv.org/abs/2505.03176) (NeurIPS 2025) | Glimpses + acciones (sacadas), predicción latente | Política heurística, sin objetivo ni RL; entrena desde cero |
-| [CanViT](https://arxiv.org/abs/2603.22570) (NeurIPS 2026) — leído | Glimpses de 128 px + memoria en rejilla ("canvas"); sin etiquetas en el preentrenamiento | Entrena desde cero destilando DINOv3 con glimpses al azar, sin RL. Luego entrena políticas con RL sobre el modelo congelado, con recompensa de segmentación (usa etiquetas). Sin tarea con objetivo; según el resumen leído, el condicionamiento a objetivo y el entrenamiento conjunto política+modelo figuran como trabajo futuro |
-| [Visual Pre-training for Navigation: What Can We Learn from Noise?](https://arxiv.org/abs/2207.00052) (IROS 2023) — leído | Sin etiquetas: dado el recorte actual y el recorte objetivo, predecir dónde está el objetivo | Regresión directa en un paso (ResNet18), sin RL ni agente que se mueva; la política posterior se entrena supervisada con acciones. No analiza la representación |
-| [AdaGlimpse](https://arxiv.org/abs/2404.03482) (ECCV 2024) — leído | RL (SAC) elige posición y escala del siguiente glimpse; ViT-B | Recompensa = bajada de la pérdida de reconstrucción o de destilación de un maestro. El encoder se entrena con esa pérdida, alternando épocas con el agente. Sin objetivo que alcanzar, sin medir olvido |
-| [GRPO-RM](https://arxiv.org/abs/2511.15256) (2025) — leído | Ajusta DINOv2 ViT-S/14 con una pérdida tipo RL | La recompensa usa la clase correcta: en la práctica es supervisado. Una decisión por imagen, sin agente. No mide olvido |
-| [EVA](https://arxiv.org/abs/2603.27340) (2026) — leído | Política de glimpses con REINFORCE | CNN pequeña, recompensa = clasificación correcta (etiquetas). Sin objetivo dado al agente |
-| [ViT foveal con política de mirada](https://arxiv.org/abs/2604.20392) (2026) | Política de mirada aprendida sobre un ViT | Orientado a precisión de clasificación |
-| [DINO-WM](https://arxiv.org/abs/2411.04983) (2024) | World model sobre DINOv2 para llegar a una imagen objetivo | Encoder congelado, planificación sin RL, entornos de control |
-| [Recurrent Models of Visual Attention](https://arxiv.org/abs/1406.6247) (2014) | RL que decide dónde mirar | Clasificación supervisada, redes pequeñas desde cero |
-| [Pretrained Visual Representations in RL](https://arxiv.org/abs/2407.17238) (2024) | Encoders preentrenados dentro de RL | Entornos de control, no navegación sobre imágenes |
+| [seq-JEPA](https://arxiv.org/abs/2505.03176) (NeurIPS 2025) | Glimpses + actions (saccades), latent prediction | Heuristic policy, no target and no RL; trains from scratch |
+| [CanViT](https://arxiv.org/abs/2603.22570) (NeurIPS 2026) — read | 128 px glimpses + grid memory ("canvas"); no labels in pretraining | Trains from scratch by distilling DINOv3 with random glimpses, without RL. It then trains policies with RL on the frozen model, with a segmentation reward (uses labels). No task with a target; according to the summary read, goal conditioning and joint policy+model training are listed as future work |
+| [Visual Pre-training for Navigation: What Can We Learn from Noise?](https://arxiv.org/abs/2207.00052) (IROS 2023) — read | No labels: given the current crop and the target crop, predict where the target is | Direct one-step regression (ResNet18), with no RL and no moving agent; the downstream policy is trained supervised with actions. Does not analyse the representation |
+| [AdaGlimpse](https://arxiv.org/abs/2404.03482) (ECCV 2024) — read | RL (SAC) chooses the position and scale of the next glimpse; ViT-B | Reward = drop in the reconstruction loss or in the distillation loss from a teacher. The encoder is trained with that loss, alternating epochs with the agent. No target to reach, no measurement of forgetting |
+| [GRPO-RM](https://arxiv.org/abs/2511.15256) (2025) — read | Fine-tunes DINOv2 ViT-S/14 with an RL-style loss | The reward uses the correct class: in practice it is supervised. One decision per image, no agent. Does not measure forgetting |
+| [EVA](https://arxiv.org/abs/2603.27340) (2026) — read | Glimpse policy with REINFORCE | Small CNN, reward = correct classification (labels). No target given to the agent |
+| [Foveated ViT with a gaze policy](https://arxiv.org/abs/2604.20392) (2026) | Learned gaze policy on a ViT | Aimed at classification accuracy |
+| [DINO-WM](https://arxiv.org/abs/2411.04983) (2024) | World model on DINOv2 to reach a target image | Frozen encoder, planning without RL, control environments |
+| [Recurrent Models of Visual Attention](https://arxiv.org/abs/1406.6247) (2014) | RL that decides where to look | Supervised classification, small networks from scratch |
+| [Pretrained Visual Representations in RL](https://arxiv.org/abs/2407.17238) (2024) | Pretrained encoders inside RL | Control environments, not navigation over images |
 
-Otras lecturas de base: [I-JEPA](https://arxiv.org/abs/2301.08243), [IWM](https://arxiv.org/abs/2403.00504), [Vision Transformers Need Registers](https://arxiv.org/abs/2309.16588), [Context Prediction (Doersch 2015)](https://arxiv.org/abs/1505.05192).
+Other background reading: [I-JEPA](https://arxiv.org/abs/2301.08243), [IWM](https://arxiv.org/abs/2403.00504), [Vision Transformers Need Registers](https://arxiv.org/abs/2309.16588), [Context Prediction (Doersch 2015)](https://arxiv.org/abs/1505.05192).
 
-Tras leer los cinco marcados (2026-11-25), la combinación sigue sin aparecer. CanViT es el más cercano en arquitectura y sitúa nuestra idea en lo que declara como trabajo futuro.
+After reading the five marked ones (2026-11-25), the combination still does not appear. CanViT is the closest in architecture and places our idea in what it declares as future work.
 
-**Objeción principal a prever:** "What Can We Learn from Noise?" obtiene la misma señal (dónde está el objetivo respecto a mí) con una regresión directa, sin RL. Hay que mostrar qué aporta el RL frente a eso → línea base obligatoria en la fase 5: ajustar el encoder prediciendo directamente el desplazamiento al objetivo, y comparar en los experimentos A y B.
+**Main objection to anticipate:** "What Can We Learn from Noise?" obtains the same signal (where the target is relative to me) with a direct regression, without RL. We have to show what RL adds over that → mandatory baseline in phase 5: fine-tune the encoder by directly predicting the offset to the target, and compare in experiments A and B.
 
-**Idea prestada:** ese paper necesita un currículo (primero objetivos que se solapan con la vista actual, después lejanos) para que el entrenamiento converja. Aplicarlo en la fase 1 si el agente no aprende: empezar con objetivos cercanos y aumentar la distancia.
+**Borrowed idea:** that paper needs a curriculum (first targets that overlap with the current view, then distant ones) for training to converge. Apply it in phase 1 if the agent does not learn: start with nearby targets and increase the distance.
 
-Antes de escribir un paper conviene una búsqueda más a fondo (Google Scholar, trabajos que citan a seq-JEPA, AdaGlimpse y CanViT).
+Before writing a paper, a more thorough search is advisable (Google Scholar, works citing seq-JEPA, AdaGlimpse and CanViT).

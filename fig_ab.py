@@ -1,4 +1,4 @@
-"""Figura de los experimentos A y B. Uso: uv run python fig_ab.py -> figures/expAB.png"""
+"""Figure for experiments A and B. Usage: uv run python fig_ab.py -> figures/expAB.png"""
 import glob
 import json
 
@@ -7,7 +7,7 @@ import numpy as np
 
 ENC = [("base", "original", "#8a8f98"), ("ft_k2_lr3e-6", "LR 3e-6", "#9cc6f2"),
        ("ft_k2_lr1e-5", "LR 1e-5", "#257de0"), ("ft_k2_lr3e-5", "LR 3e-5", "#0f3d75")]
-DY = {"ft_k2_lr1e-5": -1.6, "ft_k2_lr3e-5": 1.6}  # separa las dos etiquetas finales que se pisan
+DY = {"ft_k2_lr1e-5": -1.6, "ft_k2_lr3e-5": 1.6}  # separates the two end labels that overlap
 last = lambda f: json.loads(open(f).read().strip().splitlines()[-1])
 rep = last("results/modal/eval_repr.jsonl")
 
@@ -22,19 +22,19 @@ for key, name, col in ENC:
     knn = rep["original" if key == "base" else key]["knn_imagewoof"]
     b.scatter(knn, y.mean(0)[-1], s=70, color=col, edgecolor="white", linewidth=2, zorder=3)
     b.annotate(name, (knn, y.mean(0)[-1]), textcoords="offset points", xytext=(8, -4), fontsize=9)
-reg = {**last("results/modal/eval_repr_reg.jsonl"), **last("results/modal/eval_repr_reg2.jsonl")}  # línea base sin RL (regresión directa), en naranja
+reg = {**last("results/modal/eval_repr_reg.jsonl"), **last("results/modal/eval_repr_reg2.jsonl")}  # no-RL baseline (direct regression), in orange
 pts = []
 for lr in ("3e-7", "1e-6", "3e-6", "1e-5", "3e-5"):
     fin = [last(f)["final"]["success"] * 100 for f in sorted(glob.glob(f"results/modal/expA_reg_k2_lr{lr}_s*.jsonl"))]
     pts.append((reg[f"reg_k2_lr{lr}"]["knn_imagewoof"], np.mean(fin)))
     b.annotate(lr, pts[-1], textcoords="offset points", xytext=(-6, -13), fontsize=8, color="#b34a12", ha="right")
 b.plot(*zip(*pts), "-o", color="#f47230", ms=8, mec="white", mew=2, zorder=2)
-b.text(85.6, 77.6, "sin RL (regresión)", color="#333", fontsize=9)
-b.text(92.3, 81.9, "con RL", color="#333", fontsize=9)
-a.set_title("A: agente nuevo sobre cada encoder ajustado con RL (3 semillas)", loc="left", fontsize=10)
-a.set_xlabel("pasos (millones)"); a.set_ylabel("éxito en validación (%)"); a.set_xlim(0, 13.5)
-b.set_title("Navegación frente a información general", loc="left", fontsize=10)
-b.set_xlabel("B: k-NN en Imagewoof, imagen completa (%)"); b.set_ylabel("A: éxito final (%)")
+b.text(85.6, 77.6, "no RL (regression)", color="#333", fontsize=9)
+b.text(92.3, 81.9, "with RL", color="#333", fontsize=9)
+a.set_title("A: new agent on each RL fine-tuned encoder (3 seeds)", loc="left", fontsize=10)
+a.set_xlabel("steps (millions)"); a.set_ylabel("validation success (%)"); a.set_xlim(0, 13.5)
+b.set_title("Navigation versus general information", loc="left", fontsize=10)
+b.set_xlabel("B: k-NN on Imagewoof, full image (%)"); b.set_ylabel("A: final success (%)")
 b.set_xlim(84.5, 96.8); b.set_ylim(70, 83)
 for ax in (a, b):
     ax.spines[["top", "right"]].set_visible(False); ax.grid(alpha=0.25)
