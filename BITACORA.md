@@ -291,3 +291,33 @@ Lanzamiento: `uv run modal run --detach modal_app.py::main --module regress --ru
 Figura actualizada: `figures/expAB.png`.
 
 **Gasto en Modal:** 8,96 USD medidos en total (esta tanda: ~3,6 USD). Facturado: 0,00 USD. Tope: 15 USD.
+
+## 2026-11-26 — Regresión con LR más bajos (1e-6 y 3e-7)
+
+**Por qué.** En la tanda anterior el mejor punto de la regresión era el LR más bajo probado (3e-6); faltaba ver si con menos LR olvidaba menos sin perder navegación.
+
+Durante el ajuste: error 3,17 → 2,89 (1e-6) y 2,93 (3e-7) casillas; `x_cos` 0,91 y 0,95.
+
+**Frontera completa** (A: 3 semillas, 10 M de pasos; B: k-NN Imagewoof con imagen completa):
+
+| Ajuste | LR | Éxito val. | Éxito train | SPL | k-NN Imagewoof | CKA Imagewoof |
+|---|---|---|---|---|---|---|
+| Original | — | 71,9 ± 1,1 % | 72,4 % | 0,470 | 95,27 % | 1,00 |
+| Regresión | 3e-7 | 76,9 ± 0,5 % | 77,2 % | 0,530 | 95,22 % | 0,98 |
+| Regresión | 1e-6 | 77,7 ± 0,8 % | 78,5 % | 0,546 | 94,78 % | 0,95 |
+| Regresión | 3e-6 | 79,2 ± 0,5 % | 80,5 % | 0,566 | 93,87 % | 0,89 |
+| Regresión | 1e-5 | 77,8 ± 0,5 % | 83,4 % | 0,565 | 91,73 % | 0,74 |
+| Regresión | 3e-5 | 76,1 ± 0,9 % | 90,5 % | 0,563 | 85,57 % | 0,53 |
+| RL | 3e-6 | 75,0 ± 0,6 % | 76,1 % | 0,517 | 95,27 % | 0,98 |
+| RL | 1e-5 | 79,7 ± 0,8 % | 81,0 % | 0,565 | 94,96 % | 0,93 |
+| RL | 3e-5 | 80,9 ± 0,2 % | 82,2 % | 0,595 | 91,70 % | 0,74 |
+
+- **Las fronteras se cruzan; ninguno domina.** Sin pérdida apreciable de k-NN (~95,2 %), la regresión navega mejor (76,9 % frente a 75,0 % de RL). Con una pérdida pequeña (~0,3–0,5 puntos), RL navega mejor (79,7 % frente a 77,7 %). El máximo de navegación es de RL (80,9 % frente a 79,2 %).
+- La regresión tiene un óptimo en LR 3e-6: por debajo ajusta poco, por encima memoriza y olvida. RL sigue mejorando hasta el LR más alto probado.
+- Las diferencias entre métodos son de ~2 puntos con un solo ajuste por punto: **no alcanza para afirmar que RL es mejor que la regresión**. Sí alcanza para decir que ambos mejoran al original (+5 a +9 puntos) y que RL no memoriza al subir el LR.
+
+Incidente: la cadena de espera local se quedó congelada (probable suspensión del Mac) y los experimentos se lanzaron a mano 30 min tarde. Sin pérdida de datos.
+
+Figura actualizada: `figures/expAB.png`.
+
+**Gasto en Modal:** 11,28 USD medidos en total (esta tanda: ~2,3 USD). Facturado: 0,00 USD. Tope: 15 USD; quedan ~3,7.

@@ -22,12 +22,12 @@ for key, name, col in ENC:
     knn = rep["original" if key == "base" else key]["knn_imagewoof"]
     b.scatter(knn, y.mean(0)[-1], s=70, color=col, edgecolor="white", linewidth=2, zorder=3)
     b.annotate(name, (knn, y.mean(0)[-1]), textcoords="offset points", xytext=(8, -4), fontsize=9)
-reg = last("results/modal/eval_repr_reg.jsonl")  # línea base sin RL (regresión directa), en naranja
+reg = {**last("results/modal/eval_repr_reg.jsonl"), **last("results/modal/eval_repr_reg2.jsonl")}  # línea base sin RL (regresión directa), en naranja
 pts = []
-for lr in ("3e-6", "1e-5", "3e-5"):
+for lr in ("3e-7", "1e-6", "3e-6", "1e-5", "3e-5"):
     fin = [last(f)["final"]["success"] * 100 for f in sorted(glob.glob(f"results/modal/expA_reg_k2_lr{lr}_s*.jsonl"))]
     pts.append((reg[f"reg_k2_lr{lr}"]["knn_imagewoof"], np.mean(fin)))
-    b.annotate(f"LR {lr}", pts[-1], textcoords="offset points", xytext=(8, -4), fontsize=9)
+    b.annotate(lr, pts[-1], textcoords="offset points", xytext=(-6, -13), fontsize=8, color="#b34a12", ha="right")
 b.plot(*zip(*pts), "-o", color="#f47230", ms=8, mec="white", mew=2, zorder=2)
 b.text(85.6, 77.6, "sin RL (regresión)", color="#333", fontsize=9)
 b.text(92.3, 81.9, "con RL", color="#333", fontsize=9)
