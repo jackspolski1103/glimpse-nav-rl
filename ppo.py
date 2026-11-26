@@ -45,17 +45,19 @@ class Agent(nn.Module):
 
 
 @torch.no_grad()
-def evaluate(env, policy):
+def evaluate(env, policy, prep=None):
     """Un episodio por entorno (el primero), para no sesgar hacia episodios cortos.
 
     SPL (Anderson et al., 2018) = media de éxito * camino_más_corto / max(pasos, camino_más_corto).
     """
     env.reset_where(torch.ones(env.n, dtype=torch.bool, device=env.dev))
-    obs = env.observe()
+    prep = prep or (lambda env, obs: obs)  # fase 2: sustituye el embedding actual por el del encoder en vivo
+    obs = prep(env, env.observe())
     seen = torch.zeros(env.n, dtype=torch.bool, device=env.dev)
     succ, steps, dist = [], [], []
     for _ in range(env.max_steps):
         obs, _, done, info = env.step(policy(obs))
+        obs = prep(env, obs)
         first = ~seen[done]
         succ.append(info["success"][first]); steps.append(info["steps"][first]); dist.append(info["dist0"][first])
         seen |= done
@@ -66,41 +68,69 @@ def evaluate(env, policy):
 
 def train(env, eval_env, obs_dim, total_steps, num_steps=32, lr=2.5e-4, gamma=0.99, lam=0.95,
           epochs=4, minibatches=4, clip=0.2, ent_coef=0.01, vf_coef=0.5, max_grad=0.5, evals=10,
-          train_eval_env=None, ckpt=None, clip_vloss=False, hidden=256):
-    """train_eval_env: mide también en imágenes de entrenamiento. ckpt: prefijo para guardar el agente en cada evaluación."""
+          train_eval_env=None, ckpt=None, clip_vloss=False, hidden=256,
+          agent=None, live=None, lr_enc=1e-5, eval_prep=None, train_eval_prep=None, extra_log=None):
+    """train_eval_env: mide también en imágenes de entrenamiento. ckpt: prefijo para guardar el agente en cada evaluación.
+
+    Fase 2 (live != None): el embedding del glimpse actual sale de un encoder entrenable. En el rollout se
+    guardan sus tokens intermedios (live.tokens) y en la actualización se recalcula el embedding con gradiente
+    (live.fill), de modo que la pérdida de PPO llega al encoder. Ver finetune.py.
+    """
     dev, n = env.dev, env.n
-    agent = Agent(obs_dim, hidden).to(dev)
-    opt = torch.optim.Adam(agent.parameters(), lr=lr, eps=1e-5)
+    agent = agent or Agent(obs_dim, hidden).to(dev)
+    groups = [{"params": list(agent.parameters()), "lr": lr, "base": lr}]
+    if live:
+        groups.append({"params": live.params(), "lr": lr_enc, "base": lr_enc})
+    opt = torch.optim.Adam(groups, eps=1e-5)
     batch = n * num_steps
     updates = total_steps // batch
     buf = lambda *s: torch.zeros(num_steps, n, *s, device=dev)
     obs_b, act_b, logp_b, rew_b, done_b, val_b = buf(obs_dim), buf(), buf(), buf(), buf(), buf()
-    next_obs, next_done = env.observe(), torch.zeros(n, device=dev)
+    tok_b = live.buffer(num_steps, n) if live else None
+
+    def with_live(obs):
+        if not live:
+            return obs, None
+        tok = live.tokens(env.img, env.cell)
+        with torch.no_grad():
+            return live.fill(obs, tok), tok
+
+    (next_obs, next_tok), next_done = with_live(env.observe()), torch.zeros(n, device=dev)
     sample = lambda o: agent.act(o)[0]
     history, t0 = [], time.time()
 
     def log(u):
-        m = {"steps": u * batch, **evaluate(eval_env, sample)}
+        m = {"steps": u * batch, **evaluate(eval_env, sample, eval_prep)}
         if train_eval_env:
-            m["train_success"] = evaluate(train_eval_env, sample)["success"]
+            m["train_success"] = evaluate(train_eval_env, sample, train_eval_prep)["success"]
+        if extra_log:
+            m.update(extra_log())
         if ckpt:
             torch.save(agent.state_dict(), f"{ckpt}_{u * batch}.pt")
         history.append(m)
         tr = f"  (train {m['train_success'] * 100:5.1f} %)" if train_eval_env else ""
+        tr += "".join(f"  {k} {v:.4f}" for k, v in m.items() if k.startswith("x_"))
         print(f"pasos {m['steps']:>10,}  éxito {m['success'] * 100:5.1f} %{tr}  SPL {m['spl']:.3f}  "
               f"({u * batch / max(time.time() - t0, 1e-9):,.0f} pasos/s)", flush=True)
 
     log(0)
     for u in range(1, updates + 1):
-        opt.param_groups[0]["lr"] = lr * (1 - (u - 1) / updates)
+        for g in opt.param_groups:
+            g["lr"] = g["base"] * (1 - (u - 1) / updates)
         for t in range(num_steps):
             obs_b[t], done_b[t] = next_obs, next_done
+            if live:
+                tok_b[t] = next_tok
             with torch.no_grad():
                 a, lp, _, v = agent.act(next_obs)
-            next_obs, r, d, info = env.step(a)
+            obs, r, d, info = env.step(a)
             if info["timeout"].any():  # tiempo agotado no es un estado terminal: se continúa con V(s)
                 with torch.no_grad():
-                    r = r + gamma * agent.critic(info["final_obs"]).squeeze(-1) * info["timeout"]
+                    fo, to = info["final_obs"], info["timeout"]
+                    if live:
+                        fo[to] = live.fill(fo[to], live.tokens(info["final_img"][to], info["final_cell"][to]))
+                    r = r + gamma * agent.critic(fo).squeeze(-1) * to
+            next_obs, next_tok = with_live(obs)
             act_b[t], logp_b[t], val_b[t], rew_b[t], next_done = a, lp, v, r, d.float()
 
         with torch.no_grad():
@@ -115,9 +145,11 @@ def train(env, eval_env, obs_dim, total_steps, num_steps=32, lr=2.5e-4, gamma=0.
 
         f = lambda x: x.reshape(batch, *x.shape[2:])
         o, a, lp, ad, rt, vl = f(obs_b), f(act_b).long(), f(logp_b), f(adv), f(ret), f(val_b)
+        tk = f(tok_b) if live else None
         for _ in range(epochs):
             for mb in torch.randperm(batch, device=dev).split(batch // minibatches):
-                _, newlp, ent, newv = agent.act(o[mb], a[mb])
+                x = live.fill(o[mb], tk[mb]) if live else o[mb]  # con gradiente hacia el encoder
+                _, newlp, ent, newv = agent.act(x, a[mb])
                 ratio = (newlp - lp[mb]).exp()
                 madv = (ad[mb] - ad[mb].mean()) / (ad[mb].std() + 1e-8)
                 pg = torch.max(-madv * ratio, -madv * ratio.clamp(1 - clip, 1 + clip)).mean()
@@ -130,6 +162,8 @@ def train(env, eval_env, obs_dim, total_steps, num_steps=32, lr=2.5e-4, gamma=0.
                 opt.zero_grad()
                 loss.backward()
                 nn.utils.clip_grad_norm_(agent.parameters(), max_grad)
+                if live:
+                    nn.utils.clip_grad_norm_(live.params(), max_grad)
                 opt.step()
 
         if u % max(1, updates // evals) == 0 or u == updates:
@@ -145,14 +179,14 @@ def table_embed(split, suffix, dev, stats=None):
 
 
 def make_task(task, suffix, dev):
-    """-> (embed_train, n_train), (embed_val, n_val), obs_dim"""
+    """-> (embed_train, n_train), (embed_val, n_val), obs_dim (con el aviso de choque)"""
     if task == "positions":  # el "embedding" es la posición misma: la tarea se vuelve trivial
         eye = torch.eye(GRID * GRID, device=dev)
         emb = lambda i, c: eye[c]
-        return (emb, 1), (emb, 1), 2 * GRID * GRID + EGO * EGO
+        return (emb, 1), (emb, 1), 2 * GRID * GRID + EGO * EGO + 4
     emb_tr, n_tr, d, stats = table_embed("train", suffix, dev)
     emb_va, n_va, _, _ = table_embed("val", suffix, dev, stats)
-    return (emb_tr, n_tr), (emb_va, n_va), 2 * d + EGO * EGO
+    return (emb_tr, n_tr), (emb_va, n_va), 2 * d + EGO * EGO + 4
 
 
 def main():
@@ -165,7 +199,7 @@ def main():
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--evals", type=int, default=10)
     ap.add_argument("--hidden", type=int, default=256)
-    ap.add_argument("--walls", choices=["sensor", "bump"], help="información de borde en la observación (4 valores)")
+    ap.add_argument("--walls", choices=["bump", "sensor", "none"], default="bump", help="información de borde (ablación)")
     ap.add_argument("--clip-vloss", action="store_true", help="recorte de la pérdida de valor (CleanRL)")
     ap.add_argument("--name", help="guarda checkpoints en checkpoints/<name>_<pasos>.pt")
     args = ap.parse_args()
@@ -173,9 +207,9 @@ def main():
     dev = args.device
 
     (emb_tr, n_tr), (emb_va, n_va), obs_dim = make_task(args.task, args.suffix, dev)
-    obs_dim += 4 * bool(args.walls)
-    env = GlimpseNav(emb_tr, n_tr, args.envs, dev, walls=args.walls)
-    eval_env = GlimpseNav(emb_va, n_va, 4096, dev, walls=args.walls)
+    obs_dim -= 4 * (args.walls == "none")
+    env = GlimpseNav(emb_tr, n_tr, args.envs, dev, walls=None if args.walls == "none" else args.walls)
+    eval_env = GlimpseNav(emb_va, n_va, 4096, dev, walls=None if args.walls == "none" else args.walls)
     rand = evaluate(eval_env, lambda o: torch.randint(4, (len(o),), device=dev))
     print(f"paseo aleatorio: éxito {rand['success'] * 100:.1f} %  SPL {rand['spl']:.3f}")
     ckpt = None
@@ -183,7 +217,7 @@ def main():
         Path("checkpoints").mkdir(exist_ok=True)
         ckpt = f"checkpoints/{args.name}"
     _, history = train(env, eval_env, obs_dim, args.steps, evals=args.evals,
-                       train_eval_env=GlimpseNav(emb_tr, n_tr, 4096, dev, walls=args.walls), ckpt=ckpt,
+                       train_eval_env=GlimpseNav(emb_tr, n_tr, 4096, dev, walls=None if args.walls == "none" else args.walls), ckpt=ckpt,
                        clip_vloss=args.clip_vloss, hidden=args.hidden)
 
     Path("results").mkdir(exist_ok=True)

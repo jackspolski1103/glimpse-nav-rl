@@ -20,7 +20,7 @@ Sin etiquetas humanas en el entrenamiento: glimpses, posiciones, objetivo y reco
 | Paso | 56 px (solape 50 %) → rejilla 7×7 = 49 posiciones. Variante: 84 px → 5×5 |
 | Acciones | 4 vecinos (arriba, abajo, izquierda, derecha) |
 | Objetivo | Glimpse de otra casilla de la misma imagen, codificado con una copia congelada del encoder |
-| Estado del agente | Embedding actual + embedding objetivo + máscara de visitados |
+| Estado del agente | Embedding actual + embedding objetivo + máscara egocéntrica de visitados + aviso de choque (dirección del último movimiento bloqueado por el borde) |
 | Algoritmo | PPO, partiendo de la implementación de CleanRL (adaptada y citada) |
 | Entorno | Núcleo en tensores (episodios en paralelo) + envoltura con la interfaz de Gymnasium |
 | Validación del PPO | Fase 1 también con Stable-Baselines3 sobre el mismo entorno; deben coincidir |
@@ -28,7 +28,7 @@ Sin etiquetas humanas en el entrenamiento: glimpses, posiciones, objetivo y reco
 | Recompensa | +1 al llegar, −0,01 por paso (valores iniciales, a ajustar) |
 | Señal de fine-tuning | Solo RL. El world model queda como pérdida auxiliar opcional |
 
-Abierto: la máscara de visitados en coordenadas absolutas le revela al agente su propia posición. Alternativa: máscara egocéntrica centrada en el agente. Decidir en la fase 1.
+Resuelto en la fase 1: la máscara de visitados es egocéntrica (no revela la posición absoluta) y el agente percibe el borde solo al chocar con él.
 
 ## Fases
 

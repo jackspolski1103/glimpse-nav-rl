@@ -153,3 +153,31 @@ Observaciones sobre estos seis casos (anecdóticas, no medidas):
 - **Política 4 veces más ancha** (`--hidden 1024`, 3 M de pasos, semilla 0): 58,4 % de éxito, SPL 0,368. Con 256 unidades, a los mismos pasos, la corrida larga daba ~56–57 %. Diferencia de 1–2 puntos: ampliar la política no rompe el techo.
 - **Probes con casi 7 veces más entrenamiento** (`probes.py --steps 20000`): dirección del vecino con MLP 74,5 % (antes 72,9 %); lineal 47,1 %; posición absoluta 10,6 %. Prácticamente saturados.
 - **Conclusión:** ni más capacidad ni más entrenamiento de la cabeza mejoran de forma apreciable. Lo que limita es la información de dirección disponible en el embedding congelado (más el atasco en el borde, ver entrada anterior). Se mantiene la política pequeña (256-256).
+
+## 2026-11-25 — Decisión: aviso de choque, y nueva línea base (experimento A, encoder original)
+
+- Decisión del usuario: el agente percibe el borde con un **aviso de choque** (4 valores: dirección del último movimiento si el borde lo bloqueó). No revela la posición sin actuar. Es el valor por defecto en `env.py`; `--walls none|sensor` quedan para ablación.
+- Línea base definitiva del encoder original congelado (`ppo.py --task embeddings --steps 10000000 --evals 20 --seed S --name frozen_bump_sS`; 256 entornos):
+
+  | Semilla | Éxito (val) | Éxito (train) | SPL (val) |
+  |---|---|---|---|
+  | 0 | 71,2 % | 72,9 % | 0,473 |
+  | 1 | 72,3 % | 73,1 % | 0,473 |
+  | 2 | 71,0 % | 71,2 % | 0,460 |
+  | **Media** | **71,5 %** | 72,4 % | **0,469** |
+
+  Paseo aleatorio: 23 %, SPL 0,10. Sin aviso de choque la misma configuración daba 60,3 % (una semilla).
+- Las tres semillas quedan a ~1 punto entre sí: diferencias de más de 2–3 puntos entre encoders serán interpretables.
+- `analysis.py --name frozen_bump_s0` (50 000 episodios, éxito 71,4 %): por distancia inicial 77,7 / 73,7 / 70,2 / 66,8 / 54,9 % (1–2, 3–4, 5–6, 7–8, 9–12 casillas). Sigue fallando un 22 % a 1–2 casillas: ese es el margen atribuible al embedding.
+- Figuras: `figures/frozen_bump_s0_curva.png`, `_trayectorias.png`, `_ejemplos_1.png` (llegó en 10 de 12), `_ejemplos_2.png` (8 de 12).
+
+![Curva](figures/frozen_bump_s0_curva.png)
+![Ejemplos](figures/frozen_bump_s0_ejemplos_1.png)
+
+## 2026-11-25 — Fase 2: implementación del fine-tuning con RL
+
+- `ppo.py`: el entrenador admite un encoder en vivo (`live`). En el rollout se guardan los tokens a la salida del tronco congelado; en la actualización se recalcula el embedding del glimpse actual con gradiente, así la pérdida de PPO llega a los bloques liberados. El camino con encoder congelado no cambia (la tarea de control sigue llegando al 100 %).
+- `finetune.py`: etapa 1 (cabeza del agente, encoder congelado, 2 M de pasos) → etapa 2 (últimos `k` bloques + norma final liberados, LR propio). El glimpse objetivo siempre sale del encoder original congelado. Registra `x_cos`: similitud coseno entre el embedding ajustado y el original en glimpses de validación (deriva).
+- `uv run python test_finetune.py`: **pasa**. (1) tronco + cola reproduce el encoder completo; (2) el recorte en el dispositivo da los mismos embeddings que la fase 0 (coseno mínimo 1,00000); (3) el gradiente llega solo a los bloques liberados (3,55 M de 22,06 M parámetros con k=2).
+- Prueba de punta a punta en el Mac (32 imágenes, pocos pasos): corre completa. Velocidad de la etapa 2 en MPS: **~87 pasos/s** → 10 M de pasos serían ~32 h. Por eso la fase 2 corre en Modal.
+- `modal_app.py`: prepara los datos en un Volume de Modal y lanza corridas en GPU A10.

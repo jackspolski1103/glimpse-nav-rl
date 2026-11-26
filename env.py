@@ -3,7 +3,8 @@
 GlimpseNav: núcleo en tensores, muchos episodios en paralelo.
 GlimpseNavGym: el mismo entorno con la interfaz de Gymnasium (un episodio a la vez).
 
-Observación = [embedding actual | embedding objetivo | máscara egocéntrica de visitados].
+Observación = [embedding actual | embedding objetivo | máscara egocéntrica de visitados | aviso de choque].
+El aviso de choque (4 valores) indica la dirección del último movimiento si el borde lo bloqueó.
 La máscara es relativa al agente (13x13, él en el centro) para no revelarle su posición absoluta.
 """
 import gymnasium as gym
@@ -19,7 +20,7 @@ MOVES = [[-1, 0], [1, 0], [0, -1], [0, 1]]  # arriba, abajo, izquierda, derecha
 
 class GlimpseNav:
     def __init__(self, embed, n_images, n_envs, dev="cpu", embed_goal=None,
-                 max_steps=24, step_cost=0.01, auto_reset=True, walls=None):
+                 max_steps=24, step_cost=0.01, auto_reset=True, walls="bump"):
         """embed(img_idx, cell_idx) -> (B, D). En la fase 1 es una tabla; en la 2, el encoder en vivo."""
         self.embed, self.embed_goal = embed, embed_goal or embed
         self.n_images, self.n, self.dev = n_images, n_envs, dev
@@ -48,8 +49,12 @@ class GlimpseNav:
         self.visited[idx, pos[:, 0], pos[:, 1]] = True
         self.bump[idx] = 0
 
+    @property
+    def cell(self):
+        return self.pos[:, 0] * GRID + self.pos[:, 1]
+
     def observe(self):
-        z = self.embed(self.img, self.pos[:, 0] * GRID + self.pos[:, 1])
+        z = self.embed(self.img, self.cell)
         g = self.embed_goal(self.img, self.goal[:, 0] * GRID + self.goal[:, 1])
         pad = F.pad(self.visited.float(), (GRID - 1,) * 4)
         win = torch.arange(EGO, device=self.dev)
@@ -77,8 +82,8 @@ class GlimpseNav:
         timeout = done & ~reached
         info = {"success": reached[done], "steps": self.t[done], "dist0": self.dist0[done], "timeout": timeout}
         if self.auto_reset:
-            if timeout.any():
-                info["final_obs"] = self.observe()  # observación terminal, antes de reiniciar
+            if timeout.any():  # estado terminal, antes de reiniciar
+                info.update(final_obs=self.observe(), final_img=self.img.clone(), final_cell=self.cell)
             self.reset_where(done)
         return self.observe(), reward, done, info
 
@@ -115,8 +120,8 @@ if __name__ == "__main__":
     table = torch.randn(5, GRID * GRID, 8)
     env = GlimpseNav(lambda i, c: table[i, c], 5, 512)
     obs = env.observe()
-    assert obs.shape == (512, 2 * 8 + EGO * EGO)
-    assert (obs[:, 16:].reshape(-1, EGO, EGO)[:, GRID - 1, GRID - 1] == 1).all()  # el centro siempre está visitado
+    assert obs.shape == (512, 2 * 8 + EGO * EGO + 4)
+    assert (obs[:, 16:-4].reshape(-1, EGO, EGO)[:, GRID - 1, GRID - 1] == 1).all()  # el centro siempre está visitado
     succ, steps, dist = [], [], []
     for _ in range(40):
         _, r, done, info = env.step(oracle_action(env))
@@ -128,10 +133,12 @@ if __name__ == "__main__":
     env = GlimpseNav(lambda i, c: table[i, c], 5, 4)
     env.pos[:] = 0
     env.goal[:] = GRID - 1
-    env.step(torch.zeros(4, dtype=torch.long))  # arriba desde la fila 0
-    assert (env.pos == 0).all()
+    obs, *_ = env.step(torch.zeros(4, dtype=torch.long))  # arriba desde la fila 0
+    assert (env.pos == 0).all() and (obs[:, -4:] == torch.tensor([1.0, 0, 0, 0])).all()  # avisa del choque
+    obs, *_ = env.step(torch.ones(4, dtype=torch.long))  # abajo: se mueve, el aviso se apaga
+    assert (obs[:, -4:] == 0).all()
 
-    g = GlimpseNavGym(lambda i, c: table[i, c], 5, 2 * 8 + EGO * EGO)
+    g = GlimpseNavGym(lambda i, c: table[i, c], 5, 2 * 8 + EGO * EGO + 4)
     o, _ = g.reset(seed=0)
     assert g.observation_space.contains(o)
     for _ in range(30):
