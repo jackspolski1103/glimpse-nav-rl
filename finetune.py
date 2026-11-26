@@ -55,8 +55,15 @@ class Glimpses:
             return torch.cat([self(img[i:i + chunk], cell[i:i + chunk]) for i in range(0, len(img), chunk)])
         rows = (cell // GRID * STRIDE)[:, None] + self.ar
         cols = (cell % GRID * STRIDE)[:, None] + self.ar
-        x = self.pix[img[:, None, None, None], self.ch, rows[:, None, :, None], cols[:, None, None, :]]
+        sub = self.pix.index_select(0, img)  # primero las imágenes; el recorte se hace sobre esta copia pequeña
+        b = torch.arange(len(img), device=img.device)[:, None, None, None]
+        x = sub[b, self.ch, rows[:, None, :, None], cols[:, None, None, :]]
         return (x.float() / 255 - self.mean) / self.std
+
+
+def amp(t):
+    """Precisión mixta en GPU (unas 3 veces más rápido en una A10); sin efecto en CPU/MPS."""
+    return torch.autocast("cuda", dtype=torch.bfloat16, enabled=t.is_cuda)
 
 
 class SplitEncoder(torch.nn.Module):
@@ -73,11 +80,13 @@ class SplitEncoder(torch.nn.Module):
     @torch.no_grad()
     def trunk(self, x):
         m = self.m
-        x = m.norm_pre(m.patch_drop(m._pos_embed(m.patch_embed(x))))
-        return m.blocks[:self.split](x)
+        with amp(x):
+            x = m.norm_pre(m.patch_drop(m._pos_embed(m.patch_embed(x))))
+            return m.blocks[:self.split](x)
 
     def tail(self, tok):
-        return self.m.norm(self.m.blocks[self.split:](tok))[:, 0]  # token CLS
+        with amp(tok):
+            return self.m.norm(self.m.blocks[self.split:](tok))[:, 0].float()  # token CLS
 
     def forward(self, x):
         return self.tail(self.trunk(x))
@@ -118,9 +127,18 @@ def embed_all(model, glimpses, n_images, bs=32):
     out = []
     for i in range(0, n_images, bs):
         img = torch.arange(i, min(i + bs, n_images), device=dev)
-        z = model(glimpses(img.repeat_interleave(len(cells)), cells.repeat(len(img))))
-        out.append(z.reshape(len(img), len(cells), -1))
+        x = glimpses(img.repeat_interleave(len(cells)), cells.repeat(len(img)))
+        with amp(x):
+            z = model(x)
+        # clone(): z es una vista del tensor de todos los tokens; sin copiar, cada tanda lo retendría entero
+        out.append(z.float().reshape(len(img), len(cells), -1).clone())
     return torch.cat(out)
+
+
+def mem(tag):
+    if torch.cuda.is_available():
+        print(f"[memoria GPU] {tag}: {torch.cuda.memory_allocated() / 2**30:.1f} GB en uso, "
+              f"pico {torch.cuda.max_memory_allocated() / 2**30:.1f} GB", flush=True)
 
 
 def main(argv=None):
@@ -148,8 +166,10 @@ def main(argv=None):
     n_tr, n_va = len(g_tr.pix), len(g_va.pix)
     print(f"píxeles: train {n_tr}, val {n_va}  ({time.time() - t0:.0f} s)  dispositivo {dev}", flush=True)
 
+    mem("píxeles cargados")
     base = load_encoder().eval().to(dev)  # encoder original: objetivos y estadísticas
     e_tr, e_va = embed_all(base, g_tr, n_tr), embed_all(base, g_va, n_va)
+    mem("embeddings originales")
     stats = (e_tr.mean((0, 1)), e_tr.std((0, 1)) + 1e-6)
     t_tr, t_va = (e_tr - stats[0]) / stats[1], (e_va - stats[0]) / stats[1]
     d = e_tr.shape[-1]
@@ -160,6 +180,7 @@ def main(argv=None):
     print("== etapa 1: cabeza del agente, encoder congelado ==", flush=True)
     agent, h1 = train(env, ev_va, obs_dim, args.s1, evals=5, train_eval_env=ev_tr)
 
+    mem("fin etapa 1")
     print(f"== etapa 2: encoder en vivo, últimos {args.k} bloques, lr {args.lr_enc} ==", flush=True)
     enc = SplitEncoder(args.k).to(dev)
     half = dev == "cuda"
@@ -176,10 +197,13 @@ def main(argv=None):
                       live=live_tr, lr_enc=args.lr_enc, eval_prep=live_va.prep, train_eval_prep=live_tr.prep,
                       extra_log=drift)
 
+    mem("fin etapa 2")
     torch.save(enc.m.state_dict(), out / f"{args.name}_encoder.pt")
     torch.save(agent.state_dict(), out / f"{args.name}_agent.pt")
-    for split, g, n in (("train", g_tr, n_tr), ("val", g_va, n_va)):
+    for split, g, n, e in (("train", g_tr, n_tr, e_tr), ("val", g_va, n_va, e_va)):
         np.savez(out / f"{args.name}_{split}.npz", emb=embed_all(enc, g, n).cpu().numpy().astype(np.float16))
+        if not (out / f"base_{split}.npz").exists():  # encoder original por el mismo camino, para el experimento A
+            np.savez(out / f"base_{split}.npz", emb=e.cpu().numpy().astype(np.float16))
     (out / f"{args.name}.json").write_text(json.dumps(
         {**vars(args), "stage1": h1, "stage2": h2, "seconds": time.time() - t0}))
     print(f"listo en {time.time() - t0:.0f} s -> out/{args.name}_*", flush=True)

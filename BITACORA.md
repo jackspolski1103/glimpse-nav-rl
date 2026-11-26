@@ -181,3 +181,31 @@ Observaciones sobre estos seis casos (anecdóticas, no medidas):
 - `uv run python test_finetune.py`: **pasa**. (1) tronco + cola reproduce el encoder completo; (2) el recorte en el dispositivo da los mismos embeddings que la fase 0 (coseno mínimo 1,00000); (3) el gradiente llega solo a los bloques liberados (3,55 M de 22,06 M parámetros con k=2).
 - Prueba de punta a punta en el Mac (32 imágenes, pocos pasos): corre completa. Velocidad de la etapa 2 en MPS: **~87 pasos/s** → 10 M de pasos serían ~32 h. Por eso la fase 2 corre en Modal.
 - `modal_app.py`: prepara los datos en un Volume de Modal y lanza corridas en GPU A10.
+
+## 2026-11-26 — Fase 2: fine-tuning con RL en Modal (tres intensidades)
+
+**Lanzamiento.** `uv run modal run --detach modal_app.py --runs "ft_k2_lr1e-5:--k 2 --lr-enc 1e-5 --s2 6000000 --evals 12"` (y lo mismo con `3e-6` y `3e-5`). GPU A10, etapa 1 de 2 M de pasos (encoder congelado) + etapa 2 de 6 M (últimos 2 bloques + norma final liberados), semilla 0, precisión mixta (bfloat16).
+
+**Problemas hasta que arrancó** (cuatro intentos):
+1. Sin memoria en GPU al recortar glimpses: los índices del recorte sobre el tensor completo de píxeles ocupan varios GB. Arreglo: recortar por tandas de 512 y seleccionar primero las imágenes.
+2. Sin memoria otra vez, en el cálculo de embeddings de todo el dataset. Causa real: el token CLS es una *vista* del tensor de todos los tokens; guardarlo sin copiar retenía 156 MB por tanda. Arreglo: `.clone()`. En el Mac no se veía porque allí se copiaba a memoria normal.
+3. Un script de diagnóstico con una importación inexistente en el contenedor quedó reintentando ~10 min antes de detenerlo.
+- Medido en la A10: 2 800 glimpses/s en precisión normal, 9 000 con precisión mixta. Etapa 2: ~2 050 pasos/s (en el Mac, 87).
+
+**Resultados durante el entrenamiento** (éxito en validación; `x_cos` = similitud coseno entre el embedding ajustado y el original en glimpses de validación):
+
+| Pasos totales | Congelado (3 semillas) | LR 3e-6 | LR 1e-5 | LR 3e-5 |
+|---|---|---|---|---|
+| 2 M (inicio etapa 2) | 61,0 % | 60,4 % | 60,4 % | 60,4 % |
+| 4 M | 66,5 % | 65,4 % | 67,9 % | 65,5 % |
+| 6 M | 69,3 % | 69,2 % | 71,6 % | 70,9 % |
+| 8 M (final) | 71,2 % | 70,9 % | 73,5 % | **76,0 %** |
+| `x_cos` final | 1,00 | 0,91 | 0,79 | 0,51 |
+| SPL final | ~0,47 | 0,468 | 0,489 | 0,514 |
+
+- En la primera mitad ninguna corrida superaba al encoder congelado; en la segunda, las de LR más alto se despegan: +2,3 puntos (1e-5) y +4,8 puntos (3e-5) a los mismos pasos totales. La de 3e-5 seguía subiendo al cortar.
+- Cuanto mayor el LR, más se aleja el encoder del original (similitud 0,91 → 0,79 → 0,51).
+- Entrenamiento y validación terminan parejos en las tres (diferencias ≤1 punto al final): no hay señal clara de memorización.
+- Limitaciones: una semilla por LR; los calendarios de LR no son idénticos a los de la línea base (el del agente se reinicia en la etapa 2). **Esta comparación es preliminar: la válida es el experimento A.**
+
+**Gasto en Modal:** 4,09 USD medidos en total (0,34 de los intentos fallidos y el diagnóstico; ~3,75 de las tres corridas de ~50 min). Facturado: 0,00 USD (cubierto por créditos). Tope fijado por el usuario: 15 USD.
