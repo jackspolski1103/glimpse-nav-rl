@@ -1,8 +1,8 @@
-"""Mismos episodios de validación con el encoder original y con el ajustado con RL.
+"""Mismos episodios de validación con el encoder original y con el ajustado con RL (LR 3e-5).
 
-Antes: agente de la fase 1 (frozen_bump_s0, encoder original). Después: encoder ft_k2_lr3e-5 con el agente que
-salió de ese ajuste (objetivo codificado con el encoder original, como en el entrenamiento).
-Uso: uv run python fig_antes_despues.py -> figures/antes_despues.png
+Antes: agente frozen_bump_s0 sobre el encoder original. Después: agente nuevo del experimento A sobre el encoder
+ajustado (out/expA_ft_k2_lr3e-5_s0_agent.pt). Ambos entrenados 10 M de pasos desde cero.
+Uso: uv run python fig_antes_despues.py -> figures/antes_despues.png (resumen) y figures/antes_despues_ejemplos.png
 """
 import glob
 
@@ -12,62 +12,87 @@ import torch
 from torchvision import datasets, transforms
 
 from glimpse import GLIMPSE, GRID, IMG, STRIDE
-from ppo import Agent, make_task
-from viz import BLUE, INK, INK2, ORANGE, box, rollout
+from ppo import Agent, make_task, table_embed
+from viz import BLUE, GRIDC, INK, INK2, ORANGE, box, rollout
 
-FT, N, SEED = "ft_k2_lr3e-5", 6, 3
-load = lambda f: torch.from_numpy(np.load(f)["emb"].astype(np.float32))
+FT, GRAY = "ft_k2_lr3e-5", "#8a8f98"
 _, (emb0, n_va), obs_dim = make_task("embeddings", "", "cpu")
-tr = load("out/base_train.npz")
-mu, sd = tr.mean((0, 1)), tr.std((0, 1)) + 1e-6
-del tr
-base, ft = (load("out/base_val.npz") - mu) / sd, (load(f"out/{FT}_val.npz") - mu) / sd
+*_, stats = table_embed("train", "", "cpu", prefix=f"out/{FT}_")
+emb1 = table_embed("val", "", "cpu", stats, prefix=f"out/{FT}_")[0]
 agents = []
 for path in (max(glob.glob("checkpoints/frozen_bump_s0_*.pt"), key=lambda p: int(p.rsplit("_", 1)[1][:-3])),
-             f"out/{FT}_agent.pt"):
+             f"out/expA_{FT}_s0_agent.pt"):
     a = Agent(obs_dim)
     a.load_state_dict(torch.load(path, map_location="cpu"))
     agents.append(a)
 
+n = 5000
+g = torch.Generator().manual_seed(0)
+img = torch.randint(n_va, (n,), generator=g)
+start = torch.randint(GRID, (n, 2), generator=g)
+goal = (start + torch.randint(1, GRID, (n, 2), generator=g)) % GRID
+(p0, ok0), (p1, ok1) = (rollout(a, e, n_va, img, start, goal, 0) for a, e in zip(agents, (emb0, emb1)))
+ok0, ok1 = np.array(ok0), np.array(ok1)
+dist = (start - goal).abs().sum(1).numpy()
+cats = [("Llegan los dos", ok0 & ok1), ("Solo con el ajustado", ~ok0 & ok1),
+        ("Solo con el original", ok0 & ~ok1), ("No llega ninguno", ~ok0 & ~ok1)]
+print(f"{n} episodios idénticos: original {ok0.mean() * 100:.1f} %, ajustado {ok1.mean() * 100:.1f} %")
+for name, m in cats:
+    print(f"  {name}: {m.mean() * 100:.1f} %")
+both = ok0 & ok1
+extra = lambda p: np.array([len(x) - 1 for x in p])[both] - dist[both]
+print(f"  pasos de más cuando llegan los dos: original {extra(p0).mean():.2f}, ajustado {extra(p1).mean():.2f}")
 
-def run(n, seed):
-    g = torch.Generator().manual_seed(seed)
-    img = torch.randint(n_va, (n,), generator=g)
-    start = torch.randint(GRID, (n, 2), generator=g)
-    goal = (start + torch.randint(1, GRID, (n, 2), generator=g)) % GRID
-    before = rollout(agents[0], emb0, n_va, img, start, goal, seed)
-    after = rollout(agents[1], lambda i, c: ft[i, c], n_va, img, start, goal, seed, embed_goal=lambda i, c: base[i, c])
-    return img, start, goal, before, after
+# Resumen
+fig, (a, b) = plt.subplots(1, 2, figsize=(10.5, 3.6))
+vals = [m.mean() * 100 for _, m in cats]
+a.barh([c for c, _ in cats][::-1], vals[::-1], color=[GRAY, GRAY, BLUE, GRAY], height=0.6)
+for y, v in enumerate(vals[::-1]):
+    a.text(v + 1, y, f"{v:.1f} %", va="center", fontsize=10)
+a.set_xlim(0, 75); a.set_xlabel("% de los episodios")
+a.set_title(f"{n} episodios idénticos de validación", loc="left", fontsize=11, fontweight="bold")
+ds_ = sorted(set(dist))
+bins = [(1, 2), (3, 4), (5, 6), (7, 8), (9, 12)]
+for ok, color, label in ((ok0, GRAY, "original"), (ok1, BLUE, "ajustado con RL")):
+    y = [ok[(dist >= lo) & (dist <= hi)].mean() * 100 for lo, hi in bins]
+    b.plot(range(len(bins)), y, "-o", color=color, lw=2, ms=7, mec="white", mew=2)
+    b.text(len(bins) - 0.85, y[-1], f"{label}  {y[-1]:.0f} %", va="center", fontsize=9)
+b.set_xticks(range(len(bins)), [f"{lo}–{hi}" for lo, hi in bins]); b.set_xlim(-0.3, len(bins) + 0.9); b.set_ylim(40, 100)
+b.set_xlabel("distancia inicial al objetivo (casillas)"); b.set_ylabel("éxito (%)")
+b.set_title("Éxito según la distancia inicial", loc="left", fontsize=11, fontweight="bold")
+for ax in (a, b):
+    ax.spines[["top", "right"]].set_visible(False); ax.grid(axis="x" if ax is a else "y", color=GRIDC, lw=0.8)
+    ax.tick_params(length=0)
+fig.tight_layout(); fig.savefig("figures/antes_despues.png", dpi=160)
 
-
-_, _, _, (_, ok0), (_, ok1) = run(5000, 0)
-print(f"mismos 5000 episodios: antes {np.mean(ok0) * 100:.1f} %, después {np.mean(ok1) * 100:.1f} %")
-
-img, start, goal, before, after = run(N, SEED)
+# Ejemplos: los primeros de cada caso, en el orden en que salieron (no elegidos a mano)
+picks = [(name, int(i)) for (name, m), k in zip(cats, (2, 2, 1, 1)) for i in np.flatnonzero(m)[:k]]
 ds = datasets.ImageFolder("data/imagenette2/val", transforms.Compose(
     [transforms.Resize(IMG), transforms.CenterCrop(IMG), transforms.ToTensor()]))
-fig, axes = plt.subplots(2, N, figsize=(3.1 * N, 6.9))
-for row, (label, (paths, ok)) in enumerate((("Encoder original", before), ("Encoder ajustado con RL", after))):
-    for i in range(N):
-        ax = axes[row, i]
+fig, axes = plt.subplots(2, len(picks), figsize=(3.1 * len(picks), 7.2))
+for row, (label, paths, ok) in enumerate((("Encoder original", p0, ok0), ("Encoder ajustado con RL", p1, ok1))):
+    for col, (name, i) in enumerate(picks):
+        ax = axes[row, col]
         ax.imshow(ds[int(img[i])][0].permute(1, 2, 0))
         box(ax, start[i].tolist(), BLUE)
         box(ax, goal[i].tolist(), ORANGE)
         pts = [(c * STRIDE + GLIMPSE / 2, r * STRIDE + GLIMPSE / 2) for r, c in paths[i]]
-        for p0, p1 in zip(pts, pts[1:]):
-            if p0 != p1:  # si son iguales, chocó con el borde
+        for q0, q1 in zip(pts, pts[1:]):
+            if q0 != q1:  # si son iguales, chocó con el borde
                 for color, lw in (("white", 4.5), (INK, 2)):
-                    ax.annotate("", p1, p0, arrowprops=dict(arrowstyle="-|>", color=color, lw=lw, shrinkA=0,
+                    ax.annotate("", q1, q0, arrowprops=dict(arrowstyle="-|>", color=color, lw=lw, shrinkA=0,
                                                             shrinkB=0, mutation_scale=11))
         ax.plot(*pts[-1], "o", ms=9, color=INK, mec="white", mew=2)
-        dist = int((start[i] - goal[i]).abs().sum())
-        ax.set_title(f"{'Llegó' if ok[i] else 'No llegó'} · {len(paths[i]) - 1} pasos (mínimo {dist})", fontsize=9,
-                     loc="left", fontweight="bold" if ok[i] else "normal")
+        ax.set_xlabel(f"{'Llegó' if ok[i] else 'No llegó'} · {len(paths[i]) - 1} pasos (mínimo {dist[i]})",
+                      fontsize=9, color=INK, fontweight="bold" if ok[i] else "normal")
+        if row == 0:
+            ax.set_title(f"{name}\n({dict(zip([c for c, _ in cats], vals))[name]:.0f} % de los episodios)",
+                         fontsize=10, loc="left")
         ax.set_xticks([]); ax.set_yticks([])
         for sp in ax.spines.values():
             sp.set_visible(False)
     axes[row, 0].set_ylabel(label, fontsize=11, color=INK, fontweight="bold")
-fig.suptitle("Mismos episodios de validación · Azul: inicio · Naranja: objetivo · Flechas: recorrido · Punto negro: final",
+fig.suptitle("Azul: inicio · Naranja: objetivo · Flechas: recorrido · Punto negro: final",
              x=0.01, ha="left", fontsize=10, color=INK2, y=1.0)
-fig.tight_layout()
-fig.savefig("figures/antes_despues.png", dpi=100)
+fig.tight_layout(h_pad=2.5)
+fig.savefig("figures/antes_despues_ejemplos.png", dpi=100)

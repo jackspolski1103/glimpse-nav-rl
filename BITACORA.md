@@ -359,3 +359,16 @@ Todo en Modal, orquestado allí (`uv run modal run --detach modal_app.py::run_tr
 **Figura antes/después:** `figures/antes_despues.png` (`fig_antes_despues.py`). Seis episodios de validación al azar, idénticos para el encoder original (agente `frozen_bump_s0`) y el ajustado con RL 3e-5 (agente del propio ajuste). En 5 000 episodios idénticos: 70,7 % frente a 74,9 %.
 
 **Gasto en Modal:** 12,24 USD medidos en total (esta tanda: ~1,0 USD). Facturado: 0,00 USD. Quedan ~2,8 del tope.
+
+## 2026-11-26 — Figura antes/después rehecha
+
+El usuario señaló que en la primera versión no se veía mejora. Causas: seis episodios al azar no pueden mostrar una diferencia de 4 puntos, y el "después" usaba el agente del propio ajuste (74,9 %) en vez del agente nuevo del experimento A. Arreglo: `exp_a` ahora guarda el agente final (`out/expA_<enc>_s<seed>_agent.pt`); se repitió una corrida (RL 3e-5, semilla 0).
+
+Sobre 5 000 episodios idénticos de validación (original `frozen_bump_s0` frente a ajustado RL 3e-5):
+
+- Éxito: 70,7 % frente a 79,8 %.
+- Llegan los dos 62,8 % · solo el ajustado 16,9 % · solo el original 7,9 % · ninguno 12,3 %.
+- Cuando llegan los dos, pasos de más sobre el camino mínimo: 4,18 frente a 2,86.
+- La ventaja se mantiene en todas las distancias iniciales y es mayor en las largas (9–12 casillas: 61 % frente a 74 %).
+
+Figuras: `figures/antes_despues.png` (resumen) y `figures/antes_despues_ejemplos.png` (ejemplos de cada caso, los primeros que salieron, no elegidos a mano). La mejora es estadística: no se aprecia en una imagen suelta.

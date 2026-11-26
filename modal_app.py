@@ -78,12 +78,14 @@ def exp_a(enc: str, seed: int, steps: int = 10_000_000):
     work = f"/tmp/{enc}_s{seed}"  # carpeta propia: ppo.py escribe results/ppo.jsonl y las corridas van en paralelo
     os.makedirs(work)
     os.chdir(work)
-    sys.argv = ["ppo.py", "--emb", f"/vol/out/{enc}_", "--steps", str(steps), "--evals", "20", "--seed", str(seed)]
+    sys.argv = ["ppo.py", "--emb", f"/vol/out/{enc}_", "--steps", str(steps), "--evals", "20", "--seed", str(seed), "--name", "a"]
     import ppo
 
     ppo.main()
     os.makedirs("/vol/results", exist_ok=True)
     shutil.copy("results/ppo.jsonl", f"/vol/results/expA_{enc}_s{seed}.jsonl")
+    last = max(os.listdir("checkpoints"), key=lambda f: int(f.rsplit("_", 1)[1][:-3]))  # agente final, para figuras
+    shutil.copy(f"checkpoints/{last}", f"/vol/out/expA_{enc}_s{seed}_agent.pt")
     vol.commit()
 
 
