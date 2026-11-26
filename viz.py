@@ -57,9 +57,9 @@ def curve(run, out):
 
 
 @torch.no_grad()
-def rollout(agent, embed, n_images, img, start, goal, seed):
+def rollout(agent, embed, n_images, img, start, goal, seed, embed_goal=None):
     """Mismos episodios (imagen, inicio, objetivo) para cualquier agente. -> lista de caminos, éxitos"""
-    env = GlimpseNav(embed, n_images, len(img), auto_reset=False)
+    env = GlimpseNav(embed, n_images, len(img), auto_reset=False, embed_goal=embed_goal)
     env.img, env.pos, env.goal = img.clone(), start.clone(), goal.clone()
     env.visited[:] = False
     env.visited[env.ar, start[:, 0], start[:, 1]] = True

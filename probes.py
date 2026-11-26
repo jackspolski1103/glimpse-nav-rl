@@ -1,6 +1,6 @@
 """Fase 0: ¿cuánta información espacial hay en los embeddings congelados?
 
-Uso: uv run python probes.py [--suffix _limit200]
+Uso: uv run python probes.py [--suffix _limit200] [--emb out/ft_k2_lr1e-5_]
 Entrena en imágenes de train y evalúa en imágenes de val (no vistas).
 """
 import argparse
@@ -16,8 +16,8 @@ DEV = device()
 MOVES = torch.tensor([[-1, 0], [1, 0], [0, -1], [0, 1]], device=DEV)  # arriba, abajo, izq, der
 
 
-def load(split: str, suffix: str) -> torch.Tensor:
-    return torch.from_numpy(np.load(f"cache/{split}{suffix}.npz")["emb"].astype(np.float32)).to(DEV)
+def load(split: str, suffix: str, prefix: str = "cache/") -> torch.Tensor:
+    return torch.from_numpy(np.load(f"{prefix}{split}{suffix}.npz")["emb"].astype(np.float32)).to(DEV)
 
 
 def net(d_in: int, d_out: int, hidden: int = 0) -> nn.Module:
@@ -67,14 +67,16 @@ def fit(model, batch_fn, loss_fn, train, val, steps, bs=4096):
         return model(x), y
 
 
-def main() -> None:
+def main(argv=None) -> dict:
     ap = argparse.ArgumentParser()
     ap.add_argument("--suffix", default="")
     ap.add_argument("--steps", type=int, default=3000)
-    args = ap.parse_args()
+    ap.add_argument("--emb", default="cache/", help="prefijo de los embeddings (como en ppo.py)")
+    args = ap.parse_args(argv)
     torch.manual_seed(0)
+    res = {}
 
-    train, val = load("train", args.suffix), load("val", args.suffix)
+    train, val = load("train", args.suffix, args.emb), load("val", args.suffix, args.emb)
     mu, sd = train.mean((0, 1)), train.std((0, 1)) + 1e-6
     train, val = (train - mu) / sd, (val - mu) / sd
     d = train.shape[-1]
@@ -83,10 +85,12 @@ def main() -> None:
     print(f"imágenes train/val: {len(train)}/{len(val)}  dim: {d}  dispositivo: {DEV}")
 
     out, y = fit(net(d, GRID * GRID), batch_position, F.cross_entropy, train, val, args.steps)
+    res["posicion"] = acc(out, y)
     print(f"posición absoluta desde 1 glimpse (lineal):   {acc(out, y):5.1f} %   azar {100 / GRID**2:.1f} %")
 
     for name, h in (("lineal", 0), ("MLP", 512)):
         out, y = fit(net(2 * d, 4, h), batch_neighbor, F.cross_entropy, train, val, args.steps)
+        res[f"vecino_{name}"] = acc(out, y)
         print(f"dirección del vecino desde 2 glimpses ({name}): {acc(out, y):5.1f} %   azar 25.0 %")
 
     out, y = fit(net(2 * d, 2, 512), batch_offset, F.mse_loss, train, val, args.steps)
@@ -94,6 +98,7 @@ def main() -> None:
     base = y.abs().sum(1).mean().item()
     exact = (out.round() == y).all(1).float().mean().item() * 100
     print(f"desplazamiento entre 2 glimpses (MLP): error {err:.2f} casillas (sin información: {base:.2f}), exacto {exact:.1f} %")
+    return {**res, "desplazamiento_err": err, "desplazamiento_exacto": exact}
 
 
 if __name__ == "__main__":

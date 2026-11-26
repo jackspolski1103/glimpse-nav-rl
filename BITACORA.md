@@ -321,3 +321,41 @@ Incidente: la cadena de espera local se quedó congelada (probable suspensión d
 Figura actualizada: `figures/expAB.png`.
 
 **Gasto en Modal:** 11,28 USD medidos en total (esta tanda: ~2,3 USD). Facturado: 0,00 USD. Tope: 15 USD; quedan ~3,7.
+
+## 2026-11-26 — Qué cambió en el encoder (sondas) y transferencia a otra disposición
+
+Todo en Modal, orquestado allí (`uv run modal run --detach modal_app.py::run_transfer`). Resultados: `results/modal/probes.json`, `probes_z0.json`, `expA_z0_*.jsonl`.
+
+**Sondas de la fase 0 sobre cada encoder** (misma rejilla del ajuste; entrenadas en train, medidas en val; una semilla):
+
+| Encoder | Posición absoluta (azar 2 %) | Dirección del vecino, lineal | Dirección del vecino, MLP | Error de desplazamiento (casillas) |
+|---|---|---|---|---|
+| Original | 10,7 % | 46,7 % | 73,2 % | 2,91 |
+| RL 3e-6 | 11,2 % | 49,5 % | 74,3 % | 2,83 |
+| RL 1e-5 | 11,2 % | 51,5 % | 74,9 % | 2,78 |
+| RL 3e-5 | 11,3 % | 52,1 % | 74,8 % | 2,77 |
+| Regresión 3e-7 | 11,4 % | 49,7 % | 75,1 % | 2,80 |
+| Regresión 1e-6 | 11,7 % | 51,9 % | 76,0 % | 2,74 |
+| Regresión 3e-6 | 12,0 % | 53,1 % | 76,5 % | 2,70 |
+| Regresión 1e-5 | 12,1 % | 53,8 % | 74,5 % | 2,68 |
+| Regresión 3e-5 | 11,8 % | 52,7 % | 70,8 % | 2,75 |
+
+- La información relativa mejora poco pero de forma consistente con el LR: +5 puntos en la sonda lineal de dirección, +1,6 en la MLP, −0,13 casillas de error (RL 1e-5). La posición absoluta casi no cambia: el ajuste no mete "dónde estoy en la imagen" en el embedding.
+- La ganancia es mayor en la sonda lineal que en la MLP: el ajuste hace la información más accesible más que añadir información nueva.
+- La mejora en las sondas es pequeña comparada con los +8 puntos de navegación: las sondas de un paso no capturan lo que el agente aprovecha en episodios largos.
+
+**Transferencia: glimpses sin solape.** Imagen a 784 px, rejilla 7×7 de glimpses de 112 px sin solape (zoom 1,75×). Ningún encoder se ajustó con esta disposición. Agente nuevo, 5 M de pasos, 2 semillas.
+
+| Encoder | Éxito val. (2 semillas) | SPL | Dirección del vecino, MLP |
+|---|---|---|---|
+| Original | 57,9 / 56,2 % (57,1) | 0,333 | 62,1 % |
+| RL 1e-5 | 63,3 / 65,3 % (64,3) | 0,396 | 63,6 % |
+| Regresión 3e-6 | 62,7 / 63,4 % (63,1) | 0,390 | 64,5 % |
+
+- **La mejora se transfiere:** +7,2 puntos (RL) y +6,0 (regresión) en una disposición no vista y sin solape. No es un atajo de casar bordes solapados, que era uno de los riesgos anotados en el roadmap.
+- La tarea sin solape es más difícil para todos (57 % frente a 72 % del original).
+- RL y regresión vuelven a quedar a ~1 punto, dentro del ruido de 2 semillas.
+
+**Figura antes/después:** `figures/antes_despues.png` (`fig_antes_despues.py`). Seis episodios de validación al azar, idénticos para el encoder original (agente `frozen_bump_s0`) y el ajustado con RL 3e-5 (agente del propio ajuste). En 5 000 episodios idénticos: 70,7 % frente a 74,9 %.
+
+**Gasto en Modal:** 12,24 USD medidos en total (esta tanda: ~1,0 USD). Facturado: 0,00 USD. Quedan ~2,8 del tope.
