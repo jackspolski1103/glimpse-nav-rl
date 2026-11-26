@@ -10,9 +10,9 @@ Chronological record of what is done and of the results. The plan is in [ROADMAP
 
 ## 2026-11-25 — Phase 0: environment
 
-- Private repo: https://github.com/jackspolski1103/glimpse-nav-rl
+- Repo: https://github.com/jackspolski1103/glimpse-nav-rl
 - Environment with `uv`, Python 3.12, PyTorch 2.15.0 (MPS available), timm 1.0.31.
-- Modal installed and authenticated (workspace `jackspolski2000`) for when a GPU is needed in phase 2.
+- Modal installed and authenticated for when a GPU is needed in phase 2.
 - Code:
   - `glimpse.py`: grid constants, glimpse extraction, encoder loading. `uv run python glimpse.py` runs its check (49 glimpses per image and each one matches the expected crop): **passes**.
   - `precompute.py`: embeddings of the 49 glimpses per image with the frozen encoder → `cache/{train,val}.npz`.
