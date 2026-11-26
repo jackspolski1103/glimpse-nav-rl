@@ -372,3 +372,17 @@ Sobre 5 000 episodios idénticos de validación (original `frozen_bump_s0` frent
 - La ventaja se mantiene en todas las distancias iniciales y es mayor en las largas (9–12 casillas: 61 % frente a 74 %).
 
 Figuras: `figures/antes_despues.png` (resumen) y `figures/antes_despues_ejemplos.png` (ejemplos de cada caso, los primeros que salieron, no elegidos a mano). La mejora es estadística: no se aprecia en una imagen suelta.
+
+## 2026-11-26 — Segunda semilla del ajuste con RL (LR 1e-5)
+
+Para saber cuánto varía el resultado entre ajustes. `uv run modal run --detach modal_app.py::run_chain --name ft_k2_lr1e-5_seed1 --args "--k 2 --lr-enc 1e-5 --s2 6000000 --evals 12 --seed 1"` (ajuste + experimentos A y B encadenados en Modal).
+
+| Ajuste RL 1e-5 | Éxito val. (3 semillas del agente) | SPL | Éxito train | k-NN Imagenette | k-NN Imagewoof | CKA Imagewoof |
+|---|---|---|---|---|---|---|
+| Semilla 0 | 79,7 ± 0,8 % | 0,565 | 81,0 % | 99,29 % | 94,96 % | 0,93 |
+| Semilla 1 | 79,6 ± 0,4 % | 0,569 | 80,6 % | 99,31 % | 94,91 % | 0,94 |
+
+- El ajuste con RL es muy reproducible: 0,1 puntos de diferencia en navegación y 0,05 en k-NN entre dos ajustes independientes.
+- Con esa variación, las diferencias de ~2 puntos frente a la regresión dejan de parecer ruido del lado de RL. Falta la segunda semilla de la regresión para confirmarlo (no lanzada: no cabe en el tope de gasto).
+
+**Gasto en Modal:** 13,94 USD medidos en total. Facturado: 0,00 USD. Tope: 15 USD; queda ~1. No se lanza nada más sin que el usuario suba el tope.
