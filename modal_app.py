@@ -38,7 +38,8 @@ def prepare():
     vol.commit()
 
 
-@app.function(image=image, gpu="A10", volumes={"/vol": vol}, timeout=4 * 3600, cpu=4, memory=32768)
+# Tope de gasto: ~1,4 USD/h por corrida (GPU A10 + 2 CPU + 24 GB). El timeout acota el peor caso.
+@app.function(image=image, gpu="A10", volumes={"/vol": vol}, timeout=2 * 3600, cpu=2, memory=24576)
 def run(argv: list[str]):
     import os
 

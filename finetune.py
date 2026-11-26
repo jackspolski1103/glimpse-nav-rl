@@ -50,7 +50,9 @@ class Glimpses:
         self.mean = torch.tensor(MEAN, device=dev).view(1, 3, 1, 1)
         self.std = torch.tensor(STD, device=dev).view(1, 3, 1, 1)
 
-    def __call__(self, img, cell):
+    def __call__(self, img, cell, chunk=512):
+        if len(img) > chunk:  # los índices del recorte ocupan mucha memoria: se hace por tandas
+            return torch.cat([self(img[i:i + chunk], cell[i:i + chunk]) for i in range(0, len(img), chunk)])
         rows = (cell // GRID * STRIDE)[:, None] + self.ar
         cols = (cell % GRID * STRIDE)[:, None] + self.ar
         x = self.pix[img[:, None, None, None], self.ch, rows[:, None, :, None], cols[:, None, None, :]]
@@ -109,7 +111,7 @@ class Live:
 
 
 @torch.no_grad()
-def embed_all(model, glimpses, n_images, bs=64):
+def embed_all(model, glimpses, n_images, bs=32):
     """Embedding (token CLS) de los 49 glimpses de cada imagen -> (N, 49, D)."""
     dev = glimpses.pix.device
     cells = torch.arange(GRID * GRID, device=dev)

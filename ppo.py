@@ -171,21 +171,21 @@ def train(env, eval_env, obs_dim, total_steps, num_steps=32, lr=2.5e-4, gamma=0.
     return agent, history
 
 
-def table_embed(split, suffix, dev, stats=None):
-    e = torch.from_numpy(np.load(f"cache/{split}{suffix}.npz")["emb"].astype(np.float32)).to(dev)
+def table_embed(split, suffix, dev, stats=None, prefix="cache/"):
+    e = torch.from_numpy(np.load(f"{prefix}{split}{suffix}.npz")["emb"].astype(np.float32)).to(dev)
     stats = stats or (e.mean((0, 1)), e.std((0, 1)) + 1e-6)
     e = (e - stats[0]) / stats[1]
     return (lambda i, c: e[i, c]), len(e), e.shape[-1], stats
 
 
-def make_task(task, suffix, dev):
+def make_task(task, suffix, dev, prefix="cache/"):
     """-> (embed_train, n_train), (embed_val, n_val), obs_dim (con el aviso de choque)"""
     if task == "positions":  # el "embedding" es la posición misma: la tarea se vuelve trivial
         eye = torch.eye(GRID * GRID, device=dev)
         emb = lambda i, c: eye[c]
         return (emb, 1), (emb, 1), 2 * GRID * GRID + EGO * EGO + 4
-    emb_tr, n_tr, d, stats = table_embed("train", suffix, dev)
-    emb_va, n_va, _, _ = table_embed("val", suffix, dev, stats)
+    emb_tr, n_tr, d, stats = table_embed("train", suffix, dev, prefix=prefix)
+    emb_va, n_va, _, _ = table_embed("val", suffix, dev, stats, prefix=prefix)
     return (emb_tr, n_tr), (emb_va, n_va), 2 * d + EGO * EGO + 4
 
 
@@ -193,6 +193,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--task", choices=["positions", "embeddings"], default="embeddings")
     ap.add_argument("--suffix", default="")
+    ap.add_argument("--emb", default="cache/", help="prefijo de los embeddings: <emb>{train,val}.npz "
+                    "(encoder original: cache/; ajustado: out/<nombre>_)")
     ap.add_argument("--steps", type=int, default=2_000_000)
     ap.add_argument("--envs", type=int, default=256)
     ap.add_argument("--seed", type=int, default=0)
@@ -206,7 +208,7 @@ def main():
     torch.manual_seed(args.seed)
     dev = args.device
 
-    (emb_tr, n_tr), (emb_va, n_va), obs_dim = make_task(args.task, args.suffix, dev)
+    (emb_tr, n_tr), (emb_va, n_va), obs_dim = make_task(args.task, args.suffix, dev, args.emb)
     obs_dim -= 4 * (args.walls == "none")
     env = GlimpseNav(emb_tr, n_tr, args.envs, dev, walls=None if args.walls == "none" else args.walls)
     eval_env = GlimpseNav(emb_va, n_va, 4096, dev, walls=None if args.walls == "none" else args.walls)
