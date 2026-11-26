@@ -209,3 +209,40 @@ Observaciones sobre estos seis casos (anecdóticas, no medidas):
 - Limitaciones: una semilla por LR; los calendarios de LR no son idénticos a los de la línea base (el del agente se reinicia en la etapa 2). **Esta comparación es preliminar: la válida es el experimento A.**
 
 **Gasto en Modal:** 4,09 USD medidos en total (0,34 de los intentos fallidos y el diagnóstico; ~3,75 de las tres corridas de ~50 min). Facturado: 0,00 USD (cubierto por créditos). Tope fijado por el usuario: 15 USD.
+
+## 2026-11-26 — Experimentos A y B en Modal
+
+**Cambio de plan de cómputo.** El primer intento fue en el Mac (seis agentes en paralelo más la evaluación B) y el sistema los cortó por falta de memoria; no se salvó nada. Por indicación del usuario, lo pesado pasa a Modal: `uv run modal run --detach modal_app.py::experiments` (funciones `exp_a` y `exp_b` en `modal_app.py`). Resultados en `results/modal/`.
+
+**Experimento A — ¿navega mejor?** Agente nuevo desde cero sobre cada encoder congelado (tablas de embeddings), 10 M de pasos, 3 semillas, mismos hiperparámetros. Solo CPU en Modal (4 núcleos, ~4 500 pasos/s, ~37 min por corrida).
+
+| Encoder | Éxito val. por semilla | Media ± desv. | SPL | Éxito train |
+|---|---|---|---|---|
+| Original | 71,3 / 73,1 / 71,2 | 71,9 ± 1,1 % | 0,470 | 72,4 % |
+| Ajustado LR 3e-6 | 74,9 / 75,7 / 74,4 | 75,0 ± 0,6 % | 0,517 | 76,1 % |
+| Ajustado LR 1e-5 | 78,8 / 79,7 / 80,5 | 79,7 ± 0,8 % | 0,565 | 81,0 % |
+| Ajustado LR 3e-5 | 80,7 / 81,1 / 80,9 | **80,9 ± 0,2 %** | 0,595 | 82,2 % |
+
+- El encoder ajustado con RL navega mejor: +3,1, +7,8 y +9,0 puntos de éxito. Las diferencias son varias veces la dispersión entre semillas.
+- La ventaja aparece desde el principio del entrenamiento del agente nuevo (a 5 M de pasos: 67 / 72 / 76 / 79 %), no solo al final.
+- La mejora es mayor que la vista durante el fine-tuning (76,0 % con LR 3e-5). Diferencia a tener en cuenta: aquí el glimpse objetivo también se codifica con el encoder ajustado; durante el fine-tuning venía del original.
+- Entrenamiento y validación difieren ~1 punto: no hay memorización de imágenes.
+
+**Experimento B — ¿qué perdió?** Imagen completa a 224 px, encoder congelado, k-NN (k=20) sobre el token CLS; similitud con el encoder original sobre las mismas imágenes de validación. GPU A10 en Modal.
+
+| Encoder | k-NN Imagenette | k-NN Imagewoof | Coseno (Imagewoof) | CKA (Imagewoof) |
+|---|---|---|---|---|
+| Original | 99,54 % | 95,27 % | 1,00 | 1,00 |
+| Ajustado LR 3e-6 | 99,39 % | 95,27 % | 0,90 | 0,98 |
+| Ajustado LR 1e-5 | 99,29 % | 94,96 % | 0,75 | 0,93 |
+| Ajustado LR 3e-5 | 98,24 % | 91,70 % | 0,42 | 0,74 |
+
+- LR 3e-6 y 1e-5 casi no pierden (0 y −0,3 puntos en Imagewoof); LR 3e-5 pierde 3,6 puntos.
+- **Mejor compromiso: LR 1e-5** — +7,8 puntos de navegación por −0,3 de k-NN. Pasar a 3e-5 da solo +1,2 de navegación y cuesta 3,3 más de k-NN.
+- Imagewoof no se usó en el ajuste, pero son clases de ImageNet, que DINOv2 sí vio; es una medida de olvido, no de generalización a datos nuevos.
+
+Figura: `figures/expAB.png` (`fig_ab.py`).
+
+**Limitaciones.** Un solo fine-tuning por LR (las 3 semillas son del agente nuevo, no del ajuste). Falta la línea base sin RL (regresión directa del desplazamiento), que es la objeción principal. k-NN de clasificación es una sola medida de "información general"; falta segmentación (Pascal VOC).
+
+**Gasto en Modal:** 5,33 USD medidos en total (esta tanda: ~1,3 USD). Facturado: 0,00 USD. Tope: 15 USD.

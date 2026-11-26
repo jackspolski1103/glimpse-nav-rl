@@ -1,7 +1,10 @@
 """Lanza finetune.py en GPUs de Modal (fase 2).
 
 Uso (varias corridas en paralelo, separadas por ';', cada una 'nombre:argumentos'):
-  uv run modal run --detach modal_app.py --runs "ft_k2_lr1e-5:--k 2 --lr-enc 1e-5;ft_k2_lr3e-5:--k 2 --lr-enc 3e-5"
+  uv run modal run --detach modal_app.py::main --runs "ft_k2_lr1e-5:--k 2 --lr-enc 1e-5;ft_k2_lr3e-5:--k 2 --lr-enc 3e-5"
+
+Experimentos A y B (agentes nuevos sobre cada encoder congelado; k-NN con imagen completa):
+  uv run modal run --detach modal_app.py::experiments
 
 Los resultados quedan en el Volume 'glimpse-nav-rl', carpeta out/:
   uv run modal volume get glimpse-nav-rl out/<archivo> out/
@@ -14,7 +17,7 @@ image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("curl")
     .uv_pip_install("torch==2.15.0", "torchvision==0.29.2", "timm==1.0.31", "numpy", "gymnasium", "tqdm")
-    .add_local_python_source("glimpse", "env", "ppo", "finetune")
+    .add_local_python_source("glimpse", "env", "ppo", "finetune", "eval_repr")
 )
 DATA_URL = "https://s3.amazonaws.com/fast-ai-imageclas/imagenette2.tgz"
 
@@ -57,3 +60,55 @@ def main(runs: str):
         name, _, extra = spec.partition(":")
         call = run.spawn(["--name", name, *extra.split()])
         print(f"lanzado {name}: {call.object_id}")
+
+
+ENCODERS = ["base", "ft_k2_lr3e-6", "ft_k2_lr1e-5", "ft_k2_lr3e-5"]
+
+
+# Experimento A: solo CPU (el encoder está congelado, se usan las tablas de embeddings). ~0,2 USD/h por corrida.
+@app.function(image=image, volumes={"/vol": vol}, timeout=2 * 3600, cpu=4, memory=8192)
+def exp_a(enc: str, seed: int, steps: int = 10_000_000):
+    import os
+    import shutil
+    import sys
+
+    work = f"/tmp/{enc}_s{seed}"  # carpeta propia: ppo.py escribe results/ppo.jsonl y las corridas van en paralelo
+    os.makedirs(work)
+    os.chdir(work)
+    sys.argv = ["ppo.py", "--emb", f"/vol/out/{enc}_", "--steps", str(steps), "--evals", "20", "--seed", str(seed)]
+    import ppo
+
+    ppo.main()
+    os.makedirs("/vol/results", exist_ok=True)
+    shutil.copy("results/ppo.jsonl", f"/vol/results/expA_{enc}_s{seed}.jsonl")
+    vol.commit()
+
+
+@app.function(image=image, gpu="A10", volumes={"/vol": vol}, timeout=3600, cpu=8, memory=16384)
+def exp_b():
+    import os
+    import shutil
+    import subprocess
+    import sys
+
+    os.makedirs("/tmp/b/data")
+    os.chdir("/tmp/b")
+    for ds in ("imagenette2", "imagewoof2"):
+        subprocess.run(f"curl -sSfL --retry 10 {DATA_URL.replace('imagenette2', ds)} | tar -xz -C data",
+                       shell=True, check=True)
+    sys.argv = ["eval_repr.py", *[f"/vol/out/{e}_encoder.pt" for e in ENCODERS[1:]]]
+    import eval_repr
+
+    eval_repr.main()
+    os.makedirs("/vol/results", exist_ok=True)
+    shutil.copy("results/eval_repr.jsonl", "/vol/results/eval_repr.jsonl")
+    vol.commit()
+
+
+@app.local_entrypoint()
+def experiments(seeds: int = 3, steps: int = 10_000_000, b: bool = True):
+    if b:
+        print("B:", exp_b.spawn().object_id)
+    for enc in ENCODERS:
+        for seed in range(seeds):
+            print(f"A {enc} s{seed}:", exp_a.spawn(enc, seed, steps).object_id)
