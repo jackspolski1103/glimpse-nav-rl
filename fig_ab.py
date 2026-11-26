@@ -22,11 +22,20 @@ for key, name, col in ENC:
     knn = rep["original" if key == "base" else key]["knn_imagewoof"]
     b.scatter(knn, y.mean(0)[-1], s=70, color=col, edgecolor="white", linewidth=2, zorder=3)
     b.annotate(name, (knn, y.mean(0)[-1]), textcoords="offset points", xytext=(8, -4), fontsize=9)
-a.set_title("A: agente nuevo sobre cada encoder congelado (3 semillas)", loc="left", fontsize=10)
+reg = last("results/modal/eval_repr_reg.jsonl")  # línea base sin RL (regresión directa), en naranja
+pts = []
+for lr in ("3e-6", "1e-5", "3e-5"):
+    fin = [last(f)["final"]["success"] * 100 for f in sorted(glob.glob(f"results/modal/expA_reg_k2_lr{lr}_s*.jsonl"))]
+    pts.append((reg[f"reg_k2_lr{lr}"]["knn_imagewoof"], np.mean(fin)))
+    b.annotate(f"LR {lr}", pts[-1], textcoords="offset points", xytext=(8, -4), fontsize=9)
+b.plot(*zip(*pts), "-o", color="#f47230", ms=8, mec="white", mew=2, zorder=2)
+b.text(85.6, 77.6, "sin RL (regresión)", color="#333", fontsize=9)
+b.text(92.3, 81.9, "con RL", color="#333", fontsize=9)
+a.set_title("A: agente nuevo sobre cada encoder ajustado con RL (3 semillas)", loc="left", fontsize=10)
 a.set_xlabel("pasos (millones)"); a.set_ylabel("éxito en validación (%)"); a.set_xlim(0, 13.5)
 b.set_title("Navegación frente a información general", loc="left", fontsize=10)
 b.set_xlabel("B: k-NN en Imagewoof, imagen completa (%)"); b.set_ylabel("A: éxito final (%)")
-b.set_xlim(91, 96.5); b.set_ylim(70, 83)
+b.set_xlim(84.5, 96.8); b.set_ylim(70, 83)
 for ax in (a, b):
     ax.spines[["top", "right"]].set_visible(False); ax.grid(alpha=0.25)
 fig.tight_layout(); fig.savefig("figures/expAB.png", dpi=160)

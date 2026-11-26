@@ -246,3 +246,48 @@ Figura: `figures/expAB.png` (`fig_ab.py`).
 **Limitaciones.** Un solo fine-tuning por LR (las 3 semillas son del agente nuevo, no del ajuste). Falta la línea base sin RL (regresión directa del desplazamiento), que es la objeción principal. k-NN de clasificación es una sola medida de "información general"; falta segmentación (Pascal VOC).
 
 **Gasto en Modal:** 5,33 USD medidos en total (esta tanda: ~1,3 USD). Facturado: 0,00 USD. Tope: 15 USD.
+
+## 2026-11-26 — ¿El agente va hacia el objetivo o recorre la imagen?
+
+Pregunta del usuario. Medido con el agente del encoder congelado (`frozen_bump_s0`, 20 000 episodios de validación, una semilla):
+
+| Condición | Éxito | Primer paso acerca | Pasos que acercan (todos) |
+|---|---|---|---|
+| Agente normal | 71,8 % | 76,7 % | 53,0 % |
+| Mismo agente, objetivo cambiado por el de otra imagen | 28,8 % | 54,4 % | 34,7 % |
+| Paseo aleatorio | 23,0 % | 43,4 % | 42,9 % |
+
+- Usa el objetivo: sin el objetivo correcto cae casi al azar. Además, un barrido ciego tiene un techo del 50 % (24 pasos, 48 casillas posibles).
+- Se orienta bien al arrancar y después es menos fino: camino ≈1,5 veces el más corto en los episodios exitosos.
+
+## 2026-11-26 — Línea base sin RL: regresión directa del desplazamiento
+
+**Qué es.** `regress.py`: mismos bloques libres (k=2), mismos LR, mismos 6 M de glimpses nuevos en tandas de 8192 reutilizadas 4 épocas × 4 minilotes, mismo decaimiento y recorte de gradiente que la etapa 2 con RL. En vez de agente y recompensa, una cabeza MLP predice (Δfila, Δcolumna) al objetivo; el objetivo viene del encoder original congelado. Pares (actual, objetivo) uniformes. Calentamiento de la cabeza: 2 000 pasos con el encoder congelado.
+
+Lanzamiento: `uv run modal run --detach modal_app.py::main --module regress --runs "reg_k2_lr1e-5:--k 2 --lr-enc 1e-5;..."` y luego `modal_app.py::experiments --encs reg_k2_lr3e-6,reg_k2_lr1e-5,reg_k2_lr3e-5 --tag _reg`. A10, 37 min por ajuste.
+
+**Durante el ajuste.** Error de desplazamiento (L1, casillas, validación): 3,17 → 2,87 / 2,87 / 2,94 (LR 3e-6 / 1e-5 / 3e-5). Baja poco.
+
+**Experimentos A y B, RL frente a regresión** (A: 3 semillas del agente nuevo, 10 M de pasos; B: k-NN con imagen completa):
+
+| Ajuste | LR | Éxito val. | Éxito train | SPL | k-NN Imagenette | k-NN Imagewoof | CKA Imagewoof |
+|---|---|---|---|---|---|---|---|
+| Ninguno (original) | — | 71,9 ± 1,1 % | 72,4 % | 0,470 | 99,54 % | 95,27 % | 1,00 |
+| RL | 3e-6 | 75,0 ± 0,6 % | 76,1 % | 0,517 | 99,39 % | 95,27 % | 0,98 |
+| RL | 1e-5 | 79,7 ± 0,8 % | 81,0 % | 0,565 | 99,29 % | 94,96 % | 0,93 |
+| RL | 3e-5 | **80,9 ± 0,2 %** | 82,2 % | 0,595 | 98,24 % | 91,70 % | 0,74 |
+| Regresión | 3e-6 | 79,2 ± 0,5 % | 80,5 % | 0,566 | 99,19 % | 93,87 % | 0,89 |
+| Regresión | 1e-5 | 77,8 ± 0,5 % | 83,4 % | 0,565 | 98,88 % | 91,73 % | 0,74 |
+| Regresión | 3e-5 | 76,1 ± 0,9 % | 90,5 % | 0,563 | 98,32 % | 85,57 % | 0,53 |
+
+- **La regresión también mejora la navegación** (+4 a +7 puntos sobre el original): buena parte de la ganancia viene de la señal de posición, no del RL en sí.
+- **A igual navegación, RL olvida menos.** Cerca del 79–80 % de éxito: RL (1e-5) pierde 0,3 puntos de k-NN en Imagewoof; regresión (3e-6) pierde 1,4. A igual LR la regresión siempre olvida más (hasta −9,7 puntos con 3e-5).
+- **La regresión empeora al subir el LR y memoriza:** con 3e-5 el éxito en entrenamiento es 90,5 % y en validación 76,1 %. Con RL la diferencia train–val nunca pasa de 1,3 puntos.
+- **El mejor resultado de navegación es de RL** (80,9 % frente a 79,2 %), pero la diferencia es pequeña (1,7 puntos).
+- Con LR bajo la regresión rinde más que RL (79,2 % frente a 75,0 % con 3e-6): su señal es más densa.
+
+**Limitaciones.** Un ajuste por celda de la tabla. No probé LR menores que 3e-6 en la regresión, donde podría olvidar menos manteniendo la navegación; la frontera de la regresión no está completa por ese lado. Los pares de la regresión son uniformes y los del RL siguen la distribución de la política. Falta una medida densa (segmentación) en B.
+
+Figura actualizada: `figures/expAB.png`.
+
+**Gasto en Modal:** 8,96 USD medidos en total (esta tanda: ~3,6 USD). Facturado: 0,00 USD. Tope: 15 USD.

@@ -5,6 +5,8 @@ Uso (varias corridas en paralelo, separadas por ';', cada una 'nombre:argumentos
 
 Experimentos A y B (agentes nuevos sobre cada encoder congelado; k-NN con imagen completa):
   uv run modal run --detach modal_app.py::experiments
+  uv run modal run --detach modal_app.py::experiments --encs reg_k2_lr1e-5,reg_k2_lr3e-5 --tag _reg
+Línea base sin RL (regress.py): igual que el fine-tuning, con --module regress
 
 Los resultados quedan en el Volume 'glimpse-nav-rl', carpeta out/:
   uv run modal volume get glimpse-nav-rl out/<archivo> out/
@@ -17,7 +19,7 @@ image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("curl")
     .uv_pip_install("torch==2.15.0", "torchvision==0.29.2", "timm==1.0.31", "numpy", "gymnasium", "tqdm")
-    .add_local_python_source("glimpse", "env", "ppo", "finetune", "eval_repr")
+    .add_local_python_source("glimpse", "env", "ppo", "finetune", "eval_repr", "regress")
 )
 DATA_URL = "https://s3.amazonaws.com/fast-ai-imageclas/imagenette2.tgz"
 
@@ -43,22 +45,21 @@ def prepare():
 
 # Tope de gasto: ~1,4 USD/h por corrida (GPU A10 + 2 CPU + 24 GB). El timeout acota el peor caso.
 @app.function(image=image, gpu="A10", volumes={"/vol": vol}, timeout=2 * 3600, cpu=2, memory=24576)
-def run(argv: list[str]):
+def run(argv: list[str], module: str = "finetune"):
+    import importlib
     import os
 
     os.chdir("/vol")
-    import finetune
-
-    finetune.main(argv)
+    importlib.import_module(module).main(argv)  # finetune (RL) o regress (línea base sin RL)
     vol.commit()
 
 
 @app.local_entrypoint()
-def main(runs: str):
+def main(runs: str, module: str = "finetune"):
     prepare.remote()
     for spec in runs.split(";"):
         name, _, extra = spec.partition(":")
-        call = run.spawn(["--name", name, *extra.split()])
+        call = run.spawn(["--name", name, *extra.split()], module)
         print(f"lanzado {name}: {call.object_id}")
 
 
@@ -85,7 +86,7 @@ def exp_a(enc: str, seed: int, steps: int = 10_000_000):
 
 
 @app.function(image=image, gpu="A10", volumes={"/vol": vol}, timeout=3600, cpu=8, memory=16384)
-def exp_b():
+def exp_b(encs: list[str], tag: str = ""):
     import os
     import shutil
     import subprocess
@@ -96,19 +97,21 @@ def exp_b():
     for ds in ("imagenette2", "imagewoof2"):
         subprocess.run(f"curl -sSfL --retry 10 {DATA_URL.replace('imagenette2', ds)} | tar -xz -C data",
                        shell=True, check=True)
-    sys.argv = ["eval_repr.py", *[f"/vol/out/{e}_encoder.pt" for e in ENCODERS[1:]]]
+    sys.argv = ["eval_repr.py", *[f"/vol/out/{e}_encoder.pt" for e in encs]]
     import eval_repr
 
     eval_repr.main()
     os.makedirs("/vol/results", exist_ok=True)
-    shutil.copy("results/eval_repr.jsonl", "/vol/results/eval_repr.jsonl")
+    shutil.copy("results/eval_repr.jsonl", f"/vol/results/eval_repr{tag}.jsonl")
     vol.commit()
 
 
 @app.local_entrypoint()
-def experiments(seeds: int = 3, steps: int = 10_000_000, b: bool = True):
+def experiments(seeds: int = 3, steps: int = 10_000_000, b: bool = True, encs: str = "", tag: str = ""):
+    """encs: encoders separados por coma (por defecto, el original y los tres ajustados con RL)."""
+    encs = encs.split(",") if encs else ENCODERS
     if b:
-        print("B:", exp_b.spawn().object_id)
-    for enc in ENCODERS:
+        print("B:", exp_b.spawn([e for e in encs if e != "base"], tag).object_id)
+    for enc in encs:
         for seed in range(seeds):
             print(f"A {enc} s{seed}:", exp_a.spawn(enc, seed, steps).object_id)
