@@ -134,3 +134,7 @@ enc.load_state_dict(torch.load("ft_k2_lr1e-5_encoder.pt", map_location="cpu"))
 ## Acknowledgements
 
 Built on [DINOv2](https://github.com/facebookresearch/dinov2) (Apache 2.0; the released weights are derived from it), the PPO implementation of [CleanRL](https://github.com/vwxyzjn/cleanrl), [timm](https://github.com/huggingface/pytorch-image-models) and the [Imagenette and Imagewoof](https://github.com/fastai/imagenette) datasets.
+
+## License
+
+The code is released under the [MIT License](LICENSE). The released weights are derived from DINOv2 and remain subject to its Apache 2.0 license.
